@@ -11,6 +11,7 @@ import { CellPanel } from "./cell-panel";
 import { CivilizationPanel, TribePanel } from "./civilization-panel";
 import { PersonPanel } from "./person-panel";
 import { SettlementPanel } from "./settlement-panel";
+import { WarPanel } from "./war-panel";
 
 type ListTab = "tribes" | "settlements" | "civilizations" | "people";
 
@@ -33,6 +34,8 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
     if (c) content = <CivilizationPanel civ={c} detail={detail} />;
   }
   if (selection?.kind === "person") content = <PersonPanel personId={selection.id} detail={detail} />;
+  if (selection?.kind === "war")
+    content = <WarPanel aId={selection.aId} bId={selection.bId} detail={detail} />;
 
   if (content) {
     return (
