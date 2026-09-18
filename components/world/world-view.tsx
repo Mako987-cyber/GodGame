@@ -8,7 +8,7 @@ import type { SimulateResponse, WorldDetail } from "@/lib/dto";
 import { api, ApiError, queryKeys } from "@/lib/client/api";
 import { useWorldUi } from "@/lib/client/store";
 import { WorldControls } from "./world-controls";
-import { WorldMap } from "./world-map";
+import { WorldMapContainer } from "./map/world-map-container";
 import { WorldSidebar } from "./world-sidebar";
 import { WorldStatistics } from "./world-statistics";
 import { WorldSummary } from "./world-summary";
@@ -109,10 +109,10 @@ export function WorldView({ initial }: { initial: WorldDetail }) {
         tick={detail.world.currentTick}
       />
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,1fr)]">
-        <Panel className="p-4">
-          <WorldMap detail={detail} />
+        <Panel className="p-3 sm:p-4">
+          <WorldMapContainer detail={detail} />
         </Panel>
-        <Panel title="Dettaglio" className="xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
+        <Panel id="world-detail" title="Dettaglio" className="xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto">
           <WorldSidebar detail={detail} />
         </Panel>
       </div>

@@ -29,7 +29,7 @@ prodotto, e l'interfaccia li mostra nel pannello «Perché è successo?».
 5. [Test, lint, typecheck](#test-lint-typecheck)
 6. [Deploy su Vercel con Supabase](#deploy-su-vercel-con-supabase)
 7. [Cron opzionale](#cron-opzionale)
-8. [Architettura](#architettura)
+8. [Architettura](#architettura) · [Mappa isometrica](#mappa-isometrica)
 9. [Modello di simulazione](#modello-di-simulazione)
 10. [API](#api)
 11. [Prestazioni](#prestazioni)
@@ -84,6 +84,8 @@ npm run sim:run -- genesis 1000 100
 | `GODGAME_POSTGRES_URL`, `GODGAME_POSTGRES_URL_NON_POOLING` | —                 | Variabili del database **god_game_db** (Supabase via Vercel), create con il prefisso `GODGAME_`. Lette come fallback runtime e migrazioni. |
 | `DATABASE_ENV_PREFIX`                                      | no (`GODGAME_`)   | Prefisso delle variabili dell'integrazione, se cambia.                                                                                     |
 | `NEXT_PUBLIC_APP_URL`                                      | no                | URL pubblico dell'app.                                                                                                                     |
+| `NEXT_PUBLIC_MAP_RENDERER`                                 | no (`isometric`)  | Mappa mostrata di default: `isometric` oppure `debug` (la mappa tecnica dall'alto). L'utente può sempre cambiarla dalla pagina del mondo.  |
+| `NEXT_PUBLIC_MAP_DEBUG`                                    | no                | `1` apre di default il pannello prestazioni della mappa (FPS, tempo di frame, tile e chunk visibili).                                      |
 | `SIMULATION_MAX_TICKS_PER_REQUEST`                         | no (100)          | Limite di tick per chiamata a `/simulate`.                                                                                                 |
 | `SIMULATION_TIME_BUDGET_MS`                                | no (20000)        | Budget di calcolo per richiesta: oltre questa soglia il batch si ferma e salva i tick completati (`partial: true`).                        |
 | `SIMULATION_LOCK_TTL_MS`                                   | no (60000)        | Durata del lock per mondo (protezione da lock orfani).                                                                                     |
@@ -297,12 +299,14 @@ app/                         Next.js App Router: pagine (server) e route handler
   api/cron/advance           cron opzionale
 components/
   ui/                        primitive in stile shadcn (button, input, tabs, badge, panel…)
-  world/                     mappa canvas, controlli, cronaca, statistiche, pannelli di dettaglio
+  world/                     controlli, cronaca, statistiche, pannelli di dettaglio, mappa tecnica (debug)
+  world/map/                 mappa isometrica: contenitore, canvas, toolbar, livelli, legenda, debug
 lib/
   db/                        schema Drizzle, connessione (postgres-js | PGlite), mapper, repository, lock
   services/world-service.ts  casi d'uso: crea, carica, simula (lock → load → run → save), eventi, statistiche
   validation/                schemi Zod
   client/                    fetch API, store Zustand (solo UI), palette, formattazione
+  map-renderer/              renderer isometrico Canvas 2D: puro TypeScript, niente React né DB
   utils/                     errori applicativi, risposte API, logger JSON
 packages/simulation-core/    motore puro: nessun import da Next.js, Drizzle o DB
   src/                       config (Zod), types, prng, stock (risorse), terrain, world-generator,
@@ -338,6 +342,106 @@ opzionale può fare lo stesso lato server.
 richiesti ed eseguiti, persone, insediamenti, tribù, eventi, `loadMs`, `computeMs`, `saveMs`, `msPerTick`,
 durata totale), `cron.advance`, `simulate.failed`, `api.unhandled`. Nessun dato sensibile finisce nei log e le
 risposte di errore non espongono stack trace.
+
+### Mappa isometrica
+
+La pagina del mondo mostra una mappa isometrica 2:1 disegnata con **Canvas 2D**, senza librerie aggiuntive. La
+vecchia mappa dall'alto resta disponibile come **mappa tecnica** (selettore sopra la mappa oppure
+`NEXT_PUBLIC_MAP_RENDERER=debug`), e subentra quando il renderer isometrico fallisce: un error boundary e la
+gestione degli errori nel ciclo di disegno offrono "Riprova" o "Usa la mappa tecnica".
+
+**Perché Canvas 2D e non PixiJS o Phaser**: le mappe vanno da 24×24 a 96×96 celle (al massimo 9.216 tile). Con
+il disegno su richiesta, cioè solo quando cambiano camera o dati, e la cache a chunk, Canvas 2D resta sotto i
+3 ms per frame anche a 96×96. Una libreria WebGL avrebbe aggiunto centinaia di KB al bundle e un contesto
+WebGL da gestire (perdita del contesto, SSR, dispositivi limitati) senza un guadagno misurabile a queste
+dimensioni.
+
+**Flusso dei dati**: `WorldDetail` (API) → `buildIsometricMapViewModel` (`lib/map-renderer/view-model.ts`,
+l'unico modulo che conosce i DTO) → `IsometricRenderer`. Il renderer non fa query e non conosce lo schema
+Drizzle. Le battaglie recenti, con coordinate e caduti reali, arrivano dall'endpoint eventi già esistente
+(`type=battle`). Non ci sono nuove API né nuove tabelle.
+
+| Modulo (`lib/map-renderer/`)    | Ruolo                                                                                             |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `projection.ts`, `camera.ts`    | conversioni griglia ↔ mondo ↔ schermo, zoom centrato sul cursore, vincoli, interpolazione         |
+| `render-order.ts`               | ordine dei passaggi e ordinamento per profondità (`x + y`) degli sprite                           |
+| `tile-renderer.ts`              | un tile: pareti, faccia, acqua e schiuma, campi, fiumi, strade, tinta del territorio, decorazioni |
+| `elevation-renderer.ts`         | terrazzamenti e pareti laterali                                                                   |
+| `terrain-renderer.ts`           | chunk 16×16 in canvas offscreen, bucket di risoluzione, firma per l'invalidazione, budget LRU     |
+| `settlement-layout.ts`          | layout deterministico degli insediamenti (`f(seed, id, indice)`)                                  |
+| `building-renderer.ts`          | primitive procedurali: casa, capanna, tenda, magazzino, mura, torre, mercato, tempio, palazzo…    |
+| `settlement-renderer.ts`        | sprite degli insediamenti, icone a zoom basso, etichette                                          |
+| `border-renderer.ts`            | confini: solo dove cambia proprietario, lati collineari uniti; fronti di guerra                   |
+| `route-renderer.ts`             | rotte commerciali ad arco tratteggiato, spessore in base al volume                                |
+| `conflict-renderer.ts`          | fronti, campagne, battaglie recenti, calamità, crisi                                              |
+| `resource-renderer.ts`          | risorse notevoli con clustering in base allo zoom                                                 |
+| `hit-testing.ts`                | selezione con priorità (edificio > insediamento > conflitto > cella), tile rialzati               |
+| `asset-registry.ts`             | sprite opzionali con fallback procedurale                                                         |
+| `visibility.ts`                 | livelli predefiniti e soglie di zoom                                                              |
+| `performance.ts`, `describe.ts` | statistiche di frame; testi di tooltip e annunci                                                  |
+
+**Densità visiva**. I livelli attivi di default sono terreno, rilievo, acqua, fiumi, insediamenti, edifici,
+strade, territori e nomi. Risorse, fertilità, commercio, conflitti e griglia debug sono spenti. I dettagli
+compaiono con lo zoom (`ZOOM` in `visibility.ts`):
+
+- **da lontano**: biomi, territori con i nomi delle civiltà, icone delle capitali e delle città;
+- **a zoom medio**: villaggi, strade, edifici principali;
+- **da vicino**: singole case, campi, risorse una per cella, rovine.
+
+Le etichette si scartano se si sovrappongono, con priorità a selezione, capitali e città. Le rotte mostrate sono
+solo le 12 più intense e si evidenziano quando è selezionato un insediamento. Ogni guerra è **un** fronte, cioè i
+lati condivisi dai due territori, oppure una freccia di campagna, con un'icona che apre il pannello della guerra.
+
+**Insediamenti**. Il livello visivo deriva da `tier`: accampamento, villaggio, città (`town`), città-stato e
+capitale. La capitale è anche il `capitalSettlementId` di una civiltà attiva. Numero di case, magazzini,
+mercato, tempio, pozzo, fornaci, caserme, mura o palizzata, miniere, cave e porto seguono i conteggi reali di
+`buildings`. Le posizioni sono deterministiche e stabili: quando un villaggio cresce, le case esistenti restano
+dove sono. I tile più alti davanti a un insediamento vengono ridisegnati sopra i suoi edifici, così una casa
+dietro una collina non viene dipinta sopra la collina.
+
+**Prestazioni** (Chromium headless senza GPU, mondo 96×96 con 43 insediamenti, viewport 820×780):
+
+| Vista                | Tempo di frame | Tile visibili | Entità | Chunk visibili |
+| -------------------- | -------------- | ------------- | ------ | -------------- |
+| Mappa intera (0,13×) | ~0,7 ms        | ~8.900        | 13     | 36             |
+| Zoom medio (0,46×)   | ~2,8 ms        | ~2.900        | ~800   | 21             |
+| Zoom alto (2,6×)     | ~3 ms          | ~95           | ~45    | 6              |
+
+Il terreno statico è cotto in chunk che vengono rifatti solo quando cambia la firma delle loro celle (bioma,
+quota, proprietario, strade, campi, fiumi) o i livelli. Un avanzamento della simulazione ricostruisce quindi
+solo le zone cambiate. Oltre una scala di 2,5 pixel di dispositivo per pixel di mondo i tile visibili si
+disegnano direttamente, per nitidezza. La camera, l'hover e le animazioni vivono in ref: pan e zoom non
+causano re-render React e il ciclo `requestAnimationFrame` si ferma quando nulla cambia. Il pannello
+prestazioni (icona a forma di insetto) mostra FPS, tempo di frame, tile ed entità visibili, chunk e tempo di
+hit test.
+
+**Asset grafici**. Oggi tutto è procedurale, quindi la mappa non dipende da file esterni. Per usare uno
+spritesheet, mettilo in `public/assets/map/` e registra ogni sprite all'avvio:
+
+```ts
+import { sharedAssetRegistry } from "@/lib/map-renderer";
+
+const image = new Image();
+image.src = "/assets/map/buildings.png";
+sharedAssetRegistry.register("building:house", {
+  kind: "sprite",
+  image,
+  frame: { x: 0, y: 0, width: 48, height: 48 }, // riquadro nello spritesheet (es. da un JSON TexturePacker)
+  anchorX: 24, // punto a terra dentro l'immagine
+  anchorY: 42,
+  scale: 0.5,
+});
+```
+
+Finché l'immagine non è caricata, o se manca, `registry.get` restituisce il disegno procedurale: il rendering
+non si rompe mai. Lo sprite viene scelto al momento del disegno, quindi uno caricato dopo l'apertura della mappa
+compare dal primo frame che la mappa ridisegna. Gli id disponibili sono `building:<tipo>` (vedi `BuildingKind` in `settlement-layout.ts`).
+
+**Accessibilità**. Tutti i dati della mappa restano disponibili nella sidebar: elenchi di tribù, insediamenti e
+civiltà, e i pannelli di dettaglio. I controlli hanno `aria-label`, la legenda è testuale e la selezione viene
+annunciata in una regione `aria-live`. Dalla tastiera: frecce per muoversi, `+`/`−` per lo zoom, `0` per la
+vista iniziale, `Invio` per selezionare al centro. Su mobile la toolbar ha pulsanti grandi, i livelli e la
+legenda si aprono in un pannello dal basso e la selezione compare in un bottom sheet.
 
 ## Modello di simulazione
 

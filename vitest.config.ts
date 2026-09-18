@@ -16,5 +16,8 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "packages/**/tests/stress/**"],
     environment: "node",
     testTimeout: 60_000,
+    // PGlite start-up and migrations run in `beforeAll`: with several DB suites in parallel on a
+    // loaded machine they can exceed the 10 s default, so hooks get the same budget as tests.
+    hookTimeout: 60_000,
   },
 });
