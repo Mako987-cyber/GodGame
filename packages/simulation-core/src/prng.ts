@@ -113,6 +113,24 @@ export class Rng {
   }
 }
 
+/**
+ * Stable 32-bit hash of a string, used to derive deterministic values (mineral deposits,
+ * culture traits of legacy worlds...) without consuming the simulation RNG stream.
+ */
+export function hashCode(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** Deterministic float in [0, 1) derived from a string. */
+export function hashFloat(input: string): number {
+  return hashCode(input) / 4294967296;
+}
+
 /** Independent deterministic stream derived from a seed and a label (used by world generation). */
 export function deriveRng(seed: string, label: string): Rng {
   return Rng.fromSeed(`${seed}::${label}`);

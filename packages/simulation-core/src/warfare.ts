@@ -1,10 +1,11 @@
 import { AGE } from "./constants";
 import type { Community, SimContext } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
-import { cellAt, clamp } from "./grid";
+import { cellAt, clamp, round } from "./grid";
 import { killPerson } from "./population";
 import type { Rng } from "./prng";
-import { grantTech, techEffects } from "./technology";
+import { addResource, consumeResource, getResourceAmount, RESOURCES } from "./stock";
+import { grantTech, tribeEffects } from "./technology";
 import type { Person, Relationship, Tribe } from "./types";
 
 export interface CombatSide {
@@ -14,6 +15,10 @@ export interface CombatSide {
   technology: number;
   defense: number;
   terrain: number;
+  /** Supply penalty for fighting far from home, 1 = no penalty (default). */
+  logistics?: number;
+  /** Quality of the military leadership, 1 = average (default). */
+  leadership?: number;
 }
 
 export interface BattleOutcome {
@@ -27,7 +32,16 @@ export interface BattleOutcome {
 }
 
 export function sidePower(side: CombatSide): number {
-  return side.warriors * side.health * side.morale * side.technology * side.defense * side.terrain;
+  return (
+    side.warriors *
+    side.health *
+    side.morale *
+    side.technology *
+    side.defense *
+    side.terrain *
+    (side.logistics ?? 1) *
+    (side.leadership ?? 1)
+  );
 }
 
 /**
@@ -63,10 +77,11 @@ export function combatSide(
   communities: Community[],
   defending: Community | null,
   commitment = 1,
+  options: { distance?: number } = {},
 ): CombatSide {
   const warriors = communities.flatMap((c) => fighters(c.members));
   const committed = Math.max(0, Math.round(warriors.length * commitment));
-  const effects = techEffects(tribe.techs);
+  const effects = tribeEffects(tribe);
   const health = warriors.length ? warriors.reduce((acc, p) => acc + p.health, 0) / warriors.length : 0;
   const skill = warriors.length ? warriors.reduce((acc, p) => acc + p.skills.combat, 0) / warriors.length : 0;
   const defenders = defending ? defending.members.filter((p) => p.action === "defend").length : 0;
@@ -79,13 +94,22 @@ export function combatSide(
     terrain =
       cell.biome === "hills" ? 1.15 : cell.biome === "mountain" ? 1.3 : cell.biome === "forest" ? 1.1 : 1;
   }
+  // Supplies: an army far from its storehouses loses bite, roads soften the blow.
+  const far = options.distance ?? 0;
+  const supplies = communities.reduce((acc, c) => acc + c.stock.food, 0) / Math.max(1, warriors.length);
+  const logistics = clamp(1 - far * 0.03 + Math.min(0.15, supplies * 0.05), 0.5, 1.15);
+  const leader = tribe.leaderId ? ctx.people.get(tribe.leaderId) : undefined;
+  const commander = leader?.alive ? 1 + leader.skills.combat * 0.15 + leader.prestige * 0.1 : 0.95;
+  const barracks = defending?.settlement ? 1 + defending.settlement.buildings.barracks * 0.1 : 1;
   return {
     warriors: committed,
     health: health * (0.8 + skill * 0.4),
-    morale: clamp(tribe.morale + effects.cohesion, 0.2, 1.3),
-    technology: effects.militaryMultiplier,
-    defense,
+    morale: clamp(tribe.morale + effects.cohesion + tribe.stability.cohesion * 0.15, 0.2, 1.3),
+    technology: effects.militaryMultiplier * (tribe.culture.militarism / 100 + 0.6),
+    defense: defense * barracks,
     terrain,
+    logistics: round(logistics, 3),
+    leadership: round(commander, 3),
   };
 }
 
@@ -115,8 +139,16 @@ export interface ConflictInput {
 export function wageConflict(ctx: SimContext, input: ConflictInput) {
   const { attacker, defender, target, relationship, kind } = input;
   const commitment = kind === "raid" ? 0.5 : 1;
-  const aSide = combatSide(ctx, attacker, input.attackerCommunities, null, commitment);
+  const origin = input.attackerCommunities[0];
+  const marchDistance = origin ? Math.max(Math.abs(origin.x - target.x), Math.abs(origin.y - target.y)) : 0;
+  const aSide = combatSide(ctx, attacker, input.attackerCommunities, null, commitment, {
+    distance: marchDistance,
+  });
   const dSide = combatSide(ctx, defender, [target], target);
+  // Walls turn an assault into a siege: the attacker has to grind through the defences.
+  const walls = target.settlement?.buildings.walls ?? 0;
+  const siege = kind === "battle" && walls > 0;
+  if (siege) dSide.defense *= 1 + walls * 0.4;
   dSide.warriors = Math.round(dSide.warriors * (1 + input.allyBonus));
   if (aSide.warriors === 0) return;
   const outcome = resolveBattle(aSide, dSide, ctx.rng);
@@ -141,13 +173,34 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
     const share = kind === "raid" ? 0.3 : 0.45;
     const source = target.stock;
     const sink = input.attackerCommunities[0]?.stock ?? attacker.stock;
-    for (const key of ["food", "wood", "stone", "copper"] as const) {
-      const amount = Math.round(source[key] * share * 100) / 100;
-      source[key] = Math.round((source[key] - amount) * 100) / 100;
-      sink[key] = Math.round((sink[key] + amount) * 100) / 100;
+    for (const key of RESOURCES) {
+      const amount = round(getResourceAmount(source, key) * share, 2);
+      if (amount <= 0) continue;
+      consumeResource(source, key, amount);
+      // Part of the plunder is lost on the way home.
+      addResource(sink, key, amount * 0.85);
       if (key === "food") loot = amount;
     }
     if (!target.settlement) defender.scarcityYears = Math.max(defender.scarcityYears, 2);
+    // Sacking a settlement destroys what cannot be carried away.
+    if (kind === "battle" && target.settlement && ctx.rng.chance(0.4)) {
+      const s = target.settlement;
+      for (const type of ["hut", "storehouse", "farm", "kiln", "market"] as const) {
+        if (s.buildings[type] > 0 && ctx.rng.chance(0.35)) s.buildings[type] -= 1;
+      }
+      s.unrest = clamp(s.unrest + 0.2);
+    }
+  }
+  // War wears down the losing side's legitimacy and cohesion.
+  const loserTribe = outcome.attackerWins ? defender : attacker;
+  loserTribe.stability.legitimacy = clamp(loserTribe.stability.legitimacy - 0.05);
+  loserTribe.stability.tension = clamp(loserTribe.stability.tension + 0.06);
+  const winnerTribe = outcome.attackerWins ? attacker : defender;
+  winnerTribe.stability.legitimacy = clamp(winnerTribe.stability.legitimacy + 0.03);
+  const commander = winnerTribe.leaderId ? ctx.people.get(winnerTribe.leaderId) : undefined;
+  if (commander?.alive) {
+    commander.prestige = clamp(commander.prestige + 0.06);
+    if (!commander.title || commander.title === "chief") commander.title = commander.title ?? "commander";
   }
 
   const place = describePlace(ctx.state, target.x, target.y);
@@ -163,6 +216,7 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
     : `I ${defender.name} hanno respinto l'attacco`;
   emitEvent(ctx, {
     type: "battle",
+    subtype: siege ? "siege" : kind,
     importance: kind === "raid" ? 2 : 3,
     actors: [
       actor.tribe(attacker),
@@ -175,19 +229,31 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
     description: `${kind === "raid" ? "Incursione" : "Scontro"} presso ${where}: ${aSide.warriors} guerrieri ${attacker.name} contro ${dSide.warriors} ${defender.name}. ${result}. Caduti: ${aLosses} attaccanti, ${dLosses} difensori.`,
     metadata: {
       kind,
+      siege,
       attackerWins: outcome.attackerWins,
       margin: outcome.margin,
       attackerLosses: aLosses,
       defenderLosses: dLosses,
       loot: Math.round(loot),
-      attackerPower: Math.round(outcome.attackerPower * 10) / 10,
-      defenderPower: Math.round(outcome.defenderPower * 10) / 10,
+      attackerPower: round(outcome.attackerPower, 1),
+      defenderPower: round(outcome.defenderPower, 1),
+      attackerWarriors: aSide.warriors,
+      defenderWarriors: dSide.warriors,
+      defense: round(dSide.defense, 2),
+      logistics: aSide.logistics ?? 1,
+      marchDistance,
+      walls,
+      attackerId: attacker.id,
+      defenderId: defender.id,
     },
+    causeEventIds: relationship.warStartYear !== null ? [] : [],
   });
 
   if (kind === "battle" && outcome.attackerWins && target.settlement && outcome.margin >= 1.6) {
     const remaining = fighters(target.members).length;
-    if (remaining < aSide.warriors * 0.6) occupySettlement(ctx, attacker, defender, target);
+    // Walls buy the defenders one more chance before the settlement falls.
+    const threshold = walls > 0 ? 0.35 : 0.6;
+    if (remaining < aSide.warriors * threshold) occupySettlement(ctx, attacker, defender, target);
   }
 }
 
@@ -212,15 +278,32 @@ function occupySettlement(ctx: SimContext, attacker: Tribe, defender: Tribe, tar
     defender.status = "nomadic";
   }
   target.tribe = attacker;
+  // The land around the settlement changes hands with it.
+  for (const cell of ctx.state.cells) {
+    if (cell.settlementId === s.id) cell.ownerTribeId = attacker.id;
+  }
+  attacker.stability.legitimacy = clamp(attacker.stability.legitimacy + 0.08);
+  defender.stability.legitimacy = clamp(defender.stability.legitimacy - 0.15);
+  defender.stability.tension = clamp(defender.stability.tension + 0.15);
+  s.unrest = clamp(s.unrest + 0.35);
   emitEvent(ctx, {
     type: "conquest",
+    subtype: "settlement",
     importance: 5,
     actors: [actor.tribe(attacker), actor.tribe(defender), actor.settlement(s)],
     x: s.x,
     y: s.y,
     title: `${s.name} conquistata dai ${attacker.name}`,
     description: `Dopo la sconfitta, ${s.name} è passata sotto il controllo dei ${attacker.name}. ${survivors.length} abitanti sono stati assorbiti dai vincitori.`,
-    metadata: { settlementId: s.id, previousTribeId: defender.id, survivors: survivors.length },
+    metadata: {
+      settlementId: s.id,
+      previousTribeId: defender.id,
+      newTribeId: attacker.id,
+      survivors: survivors.length,
+      level: s.level,
+      tier: s.tier,
+      technologiesGained: [...carried].filter((t) => !attacker.techs.includes(t)).length,
+    },
   });
   for (const techId of carried) grantTech(ctx, attacker, techId, "conquest", defender);
 }

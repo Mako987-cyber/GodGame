@@ -1,4 +1,19 @@
-import type { EventActor, JsonValue, Stockpile, WorldSettings } from "@genesis/simulation-core";
+import type {
+  ConflictPhase,
+  ConstructionProject,
+  CultureTraits,
+  DiplomaticStatus,
+  DistributionPolicy,
+  EventActor,
+  GovernmentType,
+  JsonValue,
+  Season,
+  SeasonState,
+  SettlementTier,
+  Stability,
+  Stockpile,
+  WorldSettings,
+} from "@genesis/simulation-core";
 import type { WorldSummary } from "@/lib/db/schema";
 
 /** Shapes returned by the API and consumed by the UI (kept free of server-only imports). */
@@ -35,6 +50,10 @@ export interface MapLayers {
   coastal: number[];
   road: number[];
   fields: number[];
+  pastures: number[];
+  clay: number[];
+  tin: number[];
+  coal: number[];
   /** Index into `tribes`, -1 when unclaimed. */
   owner: number[];
   /** Index into `settlements`, -1 when none. */
@@ -65,6 +84,12 @@ export interface TribeDTO {
   lastFoodProduced: number;
   scarcityYears: number;
   parentTribeId: string | null;
+  techAdoption: Record<string, number>;
+  culture: CultureTraits;
+  government: GovernmentType;
+  stability: Stability;
+  distribution: DistributionPolicy;
+  dynasty: { id: string; name: string; rulers: number; prestige: number } | null;
 }
 
 export interface SettlementDTO {
@@ -75,11 +100,19 @@ export interface SettlementDTO {
   x: number;
   y: number;
   level: number;
+  tier: SettlementTier;
   status: "active" | "abandoned";
   population: number;
   stock: Stockpile;
   buildings: Record<string, number>;
-  construction: { type: string; progress: number; required: number } | null;
+  construction: {
+    type: string;
+    progress: number;
+    required: number;
+    status: ConstructionProject["status"];
+    missing: Record<string, number>;
+    startedAtTick: number;
+  } | null;
   defense: number;
   territoryRadius: number;
   foundedYear: number;
@@ -87,6 +120,11 @@ export interface SettlementDTO {
   lastProduction: Stockpile;
   lastFoodRatio: number;
   famineYears: number;
+  hygiene: number;
+  unrest: number;
+  influence: number;
+  founderId: string | null;
+  epidemic: boolean;
 }
 
 export interface CivilizationDTO {
@@ -114,19 +152,99 @@ export interface RelationshipDTO {
   distance: number;
   warStartYear: number | null;
   battles: number;
+  respect: number;
+  tradeDependency: number;
+  culturalDistance: number;
+  status: DiplomaticStatus;
+  phase: ConflictPhase;
+  lastConflictYear: number | null;
 }
 
 export interface TechnologyDTO {
   id: string;
   name: string;
+  category: string;
   description: string;
   prerequisites: string[];
   cost: number;
   effectSummary: string;
+  resourceRequirement: string;
+  geographyRequirement: string | null;
+  tradeOff: string | null;
+}
+
+export interface DynastyDTO {
+  id: string;
+  name: string;
+  tribeId: string;
+  founderId: string;
+  foundedYear: number;
+  endedYear: number | null;
+  prestige: number;
+  rulers: number;
+}
+
+export interface CrisisDTO {
+  id: string;
+  kind: string;
+  scope: string;
+  targetId: string | null;
+  startYear: number;
+  untilYear: number;
+  severity: number;
+}
+
+/** Detail of a person, loaded on demand (never for the whole population). */
+export interface PersonDTO {
+  id: string;
+  name: string;
+  tribeId: string;
+  tribeName: string | null;
+  settlementId: string | null;
+  settlementName: string | null;
+  sex: "M" | "F";
+  age: number;
+  birthYear: number;
+  alive: boolean;
+  deathYear: number | null;
+  deathCause: string | null;
+  role: string;
+  action: string;
+  health: number;
+  hunger: number;
+  prestige: number;
+  education: number;
+  wealth: number;
+  title: string | null;
+  titleSinceYear: number | null;
+  notable: boolean;
+  dynasty: { id: string; name: string } | null;
+  skills: Record<string, number>;
+  personality: Record<string, number>;
+  knowledge: string[];
+  family: {
+    mother: { id: string; name: string } | null;
+    father: { id: string; name: string } | null;
+    partner: { id: string; name: string } | null;
+    children: { id: string; name: string; alive: boolean }[];
+  };
+  events: EventDTO[];
 }
 
 export interface WorldDetail {
-  world: WorldListItem & { settings: WorldSettings; climate: { modifier: number; droughts: number } };
+  world: WorldListItem & {
+    settings: WorldSettings;
+    climate: {
+      modifier: number;
+      droughts: number;
+      trend: number;
+      harshWinter: boolean;
+      winterSeverity: number;
+      seasons: SeasonState[];
+      hazards: { id: string; kind: string; x: number; y: number; radius: number; severity: number }[];
+    };
+    simulationVersion: number;
+  };
   map: MapLayers;
   tribes: TribeDTO[];
   settlements: SettlementDTO[];
@@ -134,6 +252,17 @@ export interface WorldDetail {
   relationships: RelationshipDTO[];
   technologies: TechnologyDTO[];
   discoveries: { tribeId: string; techId: string; year: number; method: string }[];
+  dynasties: DynastyDTO[];
+  crises: CrisisDTO[];
+  notablePeople: {
+    id: string;
+    name: string;
+    tribeId: string;
+    age: number;
+    role: string;
+    title: string | null;
+    prestige: number;
+  }[];
   lastSnapshot: { tick: number; year: number } | null;
 }
 
@@ -142,6 +271,8 @@ export interface EventDTO {
   tick: number;
   year: number;
   type: string;
+  subtype: string | null;
+  causeEventIds: string[];
   importance: number;
   actors: EventActor[];
   x: number | null;
@@ -176,6 +307,38 @@ export interface StatsPoint {
   deaths: number;
   starvationDeaths: number;
   conflictDeaths: number;
+  epidemicDeaths: number;
+  foodSurplus: number;
+  storageCapacity: number;
+  goodsProduced: number;
+  tradeVolume: number;
+  wealth: number;
+  buildings: number;
+  territory: number;
+  averageTemperature: number;
+  climateStress: number;
+  averageStability: number;
+  migrations: number;
+  season: Season | string;
+}
+
+export interface CivilizationStatsPoint {
+  civilizationId: string;
+  tick: number;
+  year: number;
+  population: number;
+  settlements: number;
+  technologies: number;
+  foodStored: number;
+  wealth: number;
+  territory: number;
+  stability: number;
+  atWar: boolean;
+}
+
+export interface StatsResponse {
+  world: StatsPoint[];
+  civilizations: CivilizationStatsPoint[];
 }
 
 export interface SimulateResponse {
@@ -199,6 +362,9 @@ export interface SimulateResponse {
     foodProduced: number;
     population: number;
     populationDelta: number;
+    epidemicDeaths: number;
+    migrations: number;
+    tradeVolume: number;
   };
 }
 

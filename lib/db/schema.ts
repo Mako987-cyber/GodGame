@@ -12,14 +12,23 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
+  ActiveCrisis,
   BuildingType,
+  ConflictPhase,
   ConstructionProject,
   Counters,
   Climate,
+  CultureTraits,
+  DiplomaticStatus,
+  DistributionPolicy,
   EventActor,
+  GoodsBag,
+  GovernmentType,
   JsonValue,
   Personality,
+  SimulationConfig,
   Skills,
+  Stability,
   WorldSettings,
 } from "@genesis/simulation-core";
 
@@ -59,6 +68,10 @@ export const worlds = pgTable(
     counters: jsonb("counters").$type<Counters>().notNull(),
     climate: jsonb("climate").$type<Climate>().notNull(),
     summary: jsonb("summary").$type<WorldSummary>().notNull(),
+    /** Engine version that produced the stored state; older worlds are migrated on load. */
+    simulationVersion: integer("simulation_version").notNull().default(1),
+    config: jsonb("config").$type<SimulationConfig | Record<string, never>>().notNull().default({}),
+    crises: jsonb("crises").$type<ActiveCrisis[]>().notNull().default([]),
     /** Reserved for future authentication. */
     ownerId: text("owner_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -87,6 +100,10 @@ export const worldCells = pgTable(
     maxFauna: doublePrecision("max_fauna").notNull(),
     copper: doublePrecision("copper").notNull(),
     iron: doublePrecision("iron").notNull(),
+    /** Nullable on purpose: legacy cells derive their deposits deterministically on load. */
+    clay: doublePrecision("clay"),
+    tin: doublePrecision("tin"),
+    coal: doublePrecision("coal"),
     habitability: doublePrecision("habitability").notNull(),
     river: boolean("river").notNull(),
     riverName: text("river_name"),
@@ -95,6 +112,7 @@ export const worldCells = pgTable(
     settlementId: text("settlement_id"),
     road: boolean("road").notNull(),
     fields: integer("fields").notNull(),
+    pastures: integer("pastures").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.y, t.x] })],
 );
@@ -114,8 +132,10 @@ export const tribes = pgTable(
     wood: doublePrecision("wood").notNull(),
     stone: doublePrecision("stone").notNull(),
     copper: doublePrecision("copper").notNull(),
+    goods: jsonb("goods").$type<GoodsBag>().notNull().default({}),
     techs: jsonb("techs").$type<string[]>().notNull(),
     techProgress: jsonb("tech_progress").$type<Record<string, number>>().notNull(),
+    techAdoption: jsonb("tech_adoption").$type<Record<string, number>>().notNull().default({}),
     yearsAtLocation: integer("years_at_location").notNull(),
     scarcityYears: integer("scarcity_years").notNull(),
     foundedYear: integer("founded_year").notNull(),
@@ -128,6 +148,12 @@ export const tribes = pgTable(
     lastFoodProduced: doublePrecision("last_food_produced").notNull(),
     lastFoodConsumed: doublePrecision("last_food_consumed").notNull(),
     lastFoodRatio: doublePrecision("last_food_ratio").notNull(),
+    culture: jsonb("culture").$type<CultureTraits | null>(),
+    government: text("government").$type<GovernmentType>(),
+    stability: jsonb("stability").$type<Stability | null>(),
+    distribution: text("distribution").$type<DistributionPolicy>(),
+    dynastyId: text("dynasty_id"),
+    lastLeaderChangeYear: integer("last_leader_change_year"),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.id] }), index("tribes_world_seq_idx").on(t.worldId, t.seq)],
 );
@@ -182,6 +208,13 @@ export const people = pgTable(
     knowledge: jsonb("knowledge").$type<string[]>().notNull(),
     lastChildYear: integer("last_child_year"),
     notable: boolean("notable").notNull(),
+    prestige: doublePrecision("prestige").notNull().default(0),
+    education: doublePrecision("education").notNull().default(0),
+    wealth: doublePrecision("wealth").notNull().default(0),
+    birthSettlementId: text("birth_settlement_id"),
+    dynastyId: text("dynasty_id"),
+    title: text("title"),
+    titleSinceYear: integer("title_since_year"),
   },
   (t) => [
     primaryKey({ columns: [t.worldId, t.id] }),
@@ -190,6 +223,10 @@ export const people = pgTable(
       .on(t.worldId, t.seq)
       .where(sql`${t.alive}`),
     index("people_tribe_idx").on(t.worldId, t.tribeId),
+    // Notable people are the ones the UI shows in detail.
+    index("people_notable_idx")
+      .on(t.worldId, t.prestige)
+      .where(sql`${t.notable}`),
   ],
 );
 
@@ -212,6 +249,7 @@ export const settlements = pgTable(
     wood: doublePrecision("wood").notNull(),
     stone: doublePrecision("stone").notNull(),
     copper: doublePrecision("copper").notNull(),
+    goods: jsonb("goods").$type<GoodsBag>().notNull().default({}),
     buildings: jsonb("buildings").$type<Record<BuildingType, number>>().notNull(),
     construction: jsonb("construction").$type<ConstructionProject | null>(),
     defense: doublePrecision("defense").notNull(),
@@ -219,10 +257,16 @@ export const settlements = pgTable(
     famineYears: integer("famine_years").notNull(),
     roadLinks: jsonb("road_links").$type<string[]>().notNull(),
     lastProduction: jsonb("last_production")
-      .$type<{ food: number; wood: number; stone: number; copper: number }>()
+      .$type<{ food: number; wood: number; stone: number; copper: number; goods?: GoodsBag }>()
       .notNull(),
     lastFoodRatio: doublePrecision("last_food_ratio").notNull(),
     population: integer("population").notNull(),
+    tier: text("tier"),
+    hygiene: doublePrecision("hygiene").notNull().default(0.8),
+    unrest: doublePrecision("unrest").notNull().default(0.05),
+    influence: doublePrecision("influence").notNull().default(1),
+    founderId: text("founder_id"),
+    lastEpidemicYear: integer("last_epidemic_year"),
   },
   (t) => [
     primaryKey({ columns: [t.worldId, t.id] }),
@@ -294,6 +338,13 @@ export const relationships = pgTable(
     lastInteractionYear: integer("last_interaction_year").notNull(),
     battles: integer("battles").notNull(),
     truceUntilYear: integer("truce_until_year"),
+    respect: doublePrecision("respect").notNull().default(0.1),
+    tradeDependency: doublePrecision("trade_dependency").notNull().default(0),
+    culturalDistance: doublePrecision("cultural_distance").notNull().default(0.3),
+    status: text("status").$type<DiplomaticStatus>().notNull().default("contact"),
+    phase: text("phase").$type<ConflictPhase>().notNull().default("peace"),
+    lastConflictYear: integer("last_conflict_year"),
+    phaseYears: integer("phase_years").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.id] })],
 );
@@ -307,8 +358,10 @@ export const historicalEvents = pgTable(
     tick: integer("tick").notNull(),
     year: integer("year").notNull(),
     type: text("type").notNull(),
+    subtype: text("subtype"),
     importance: integer("importance").notNull(),
     actors: jsonb("actors").$type<EventActor[]>().notNull(),
+    causeEventIds: jsonb("cause_event_ids").$type<string[]>().notNull().default([]),
     x: integer("x"),
     y: integer("y"),
     title: text("title").notNull(),
@@ -346,6 +399,19 @@ export const worldStats = pgTable(
     deaths: integer("deaths").notNull(),
     starvationDeaths: integer("starvation_deaths").notNull(),
     conflictDeaths: integer("conflict_deaths").notNull(),
+    epidemicDeaths: integer("epidemic_deaths").notNull().default(0),
+    foodSurplus: doublePrecision("food_surplus").notNull().default(0),
+    storageCapacity: doublePrecision("storage_capacity").notNull().default(0),
+    goodsProduced: doublePrecision("goods_produced").notNull().default(0),
+    tradeVolume: doublePrecision("trade_volume").notNull().default(0),
+    wealth: doublePrecision("wealth").notNull().default(0),
+    buildings: integer("buildings").notNull().default(0),
+    territory: integer("territory").notNull().default(0),
+    averageTemperature: doublePrecision("average_temperature").notNull().default(0.5),
+    climateStress: doublePrecision("climate_stress").notNull().default(0),
+    averageStability: doublePrecision("average_stability").notNull().default(0),
+    migrations: integer("migrations").notNull().default(0),
+    season: text("season").notNull().default("winter"),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.tick] }), index("world_stats_year_idx").on(t.worldId, t.year)],
 );
@@ -362,6 +428,47 @@ export const worldSnapshots = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.tick] })],
+);
+
+/** Ruling families: they outlive their members and give continuity to the political history. */
+export const dynasties = pgTable(
+  "dynasties",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    name: text("name").notNull(),
+    tribeId: text("tribe_id").notNull(),
+    founderId: text("founder_id").notNull(),
+    foundedYear: integer("founded_year").notNull(),
+    endedYear: integer("ended_year"),
+    prestige: doublePrecision("prestige").notNull(),
+    rulers: integer("rulers").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.id] }), index("dynasties_tribe_idx").on(t.worldId, t.tribeId)],
+);
+
+/** Per-civilization time series, written every `observability.civStatsInterval` ticks. */
+export const civilizationStats = pgTable(
+  "civilization_stats",
+  {
+    worldId: worldRef(),
+    civilizationId: text("civilization_id").notNull(),
+    tick: integer("tick").notNull(),
+    year: integer("year").notNull(),
+    population: integer("population").notNull(),
+    settlements: integer("settlements").notNull(),
+    technologies: integer("technologies").notNull(),
+    foodStored: doublePrecision("food_stored").notNull(),
+    wealth: doublePrecision("wealth").notNull(),
+    territory: integer("territory").notNull(),
+    stability: doublePrecision("stability").notNull(),
+    atWar: boolean("at_war").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.civilizationId, t.tick] }),
+    index("civ_stats_world_tick_idx").on(t.worldId, t.tick),
+  ],
 );
 
 export const simulationLocks = pgTable("simulation_locks", {
@@ -392,5 +499,7 @@ export const simulationRuns = pgTable(
 );
 
 export type WorldRow = typeof worlds.$inferSelect;
+export type DynastyRow = typeof dynasties.$inferSelect;
+export type CivilizationStatsRow = typeof civilizationStats.$inferSelect;
 export type EventRow = typeof historicalEvents.$inferSelect;
 export type StatsRow = typeof worldStats.$inferSelect;

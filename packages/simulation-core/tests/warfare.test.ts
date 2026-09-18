@@ -8,6 +8,8 @@ const side = (warriors: number, overrides: Partial<CombatSide> = {}): CombatSide
   technology: 1,
   defense: 1,
   terrain: 1,
+  logistics: 1,
+  leadership: 1,
   ...overrides,
 });
 

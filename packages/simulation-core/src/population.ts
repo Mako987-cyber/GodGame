@@ -1,11 +1,15 @@
 import { createPerson } from "./agents";
+import { winterMortalityFactor } from "./climate";
 import { AGE, MORTALITY } from "./constants";
 import type { Community, SimContext } from "./context";
 import { nextId } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
-import { clamp } from "./grid";
+import { cellAt, clamp, round } from "./grid";
+import { educate, ensureLeader, inherit } from "./leadership";
 import type { TechEffects } from "./technology";
 import type { DeathCause, Household, Person, Tribe } from "./types";
+
+export { ensureLeader };
 
 export function baseMortality(age: number): number {
   for (const [limit, p] of MORTALITY) if (age < limit) return p;
@@ -57,33 +61,77 @@ export function killPerson(ctx: SimContext, person: Person, cause: DeathCause) {
   }
 
   const tribe = ctx.tribes.get(person.tribeId);
+  inherit(ctx, person, tribe);
+  const causeText: Record<DeathCause, string> = {
+    natural: "per vecchiaia",
+    starvation: "di fame",
+    conflict: "in battaglia",
+    illness: "di malattia",
+    epidemic: "durante l'epidemia",
+    disaster: "in una calamità",
+  };
   if (tribe && tribe.leaderId === person.id) {
     tribe.leaderId = null;
-    const causeText: Record<DeathCause, string> = {
-      natural: "per vecchiaia",
-      starvation: "di fame",
-      conflict: "in battaglia",
-      illness: "di malattia",
-    };
+    tribe.stability.legitimacy = clamp(tribe.stability.legitimacy - 0.12);
+    tribe.stability.tension = clamp(tribe.stability.tension + 0.08);
+    const followers = state.people.reduce((acc, p) => acc + (p.alive && p.tribeId === tribe.id ? 1 : 0), 0);
+    const settled = state.settlements.some((s) => s.status === "active" && s.tribeId === tribe.id);
     emitEvent(ctx, {
       type: "notable_death",
-      importance: 3,
+      subtype: "leader",
+      importance: followers >= 150 ? 4 : followers >= 50 || settled ? 3 : 2,
       actors: [actor.person(person), actor.tribe(tribe)],
       x: person.x,
       y: person.y,
       title: `Muore ${person.name}, guida dei ${tribe.name}`,
       description: `${person.name}, guida della tribù ${tribe.name}, è morto ${causeText[cause]} a ${person.age} anni presso ${describePlace(ctx.state, person.x, person.y)}.`,
-      metadata: { personId: person.id, cause, age: person.age },
+      metadata: {
+        personId: person.id,
+        cause,
+        age: person.age,
+        prestige: person.prestige,
+        dynastyId: person.dynastyId,
+        yearsInPower: person.titleSinceYear === null ? null : state.year - person.titleSinceYear,
+      },
+    });
+  } else if (person.notable && person.prestige >= 0.8 && person.title !== null && person.age >= 30 && tribe) {
+    emitEvent(ctx, {
+      type: "notable_death",
+      subtype: person.title,
+      importance: 2,
+      actors: [actor.person(person), actor.tribe(tribe)],
+      x: person.x,
+      y: person.y,
+      title: `Muore ${person.name}`,
+      description: `${person.name}, figura di rilievo tra i ${tribe.name}, è morto ${causeText[cause]} a ${person.age} anni.`,
+      metadata: {
+        personId: person.id,
+        cause,
+        age: person.age,
+        title: person.title,
+        prestige: person.prestige,
+      },
     });
   }
+  person.title = null;
 }
 
 /** Step 8: ageing and natural mortality (age curve x health x technology). */
 export function ageAndNaturalDeaths(ctx: SimContext, community: Community, effects: TechEffects) {
+  const cell = cellAt(ctx.state, community.x, community.y);
+  // Winter kills: how much depends on the local climate and on the shelter available.
+  const winter = winterMortalityFactor(ctx.state, cell);
+  const shelter = community.settlement
+    ? 1 -
+      Math.min(0.35, community.settlement.buildings.hut * 0.02 + community.settlement.buildings.camp * 0.03)
+    : 1;
+  const clothing = community.tribe.techs.includes("clothing") ? 0.9 : 1;
+  const cold = 1 + (winter - 1) * shelter * clothing;
   for (const p of community.members) {
     if (!p.alive) continue;
     p.age += 1;
-    const risk = baseMortality(p.age) * effects.mortalityMultiplier * (1.8 - p.health * 0.9);
+    const frail = p.age < 5 || p.age >= AGE.elder ? cold : 1 + (cold - 1) * 0.5;
+    const risk = baseMortality(p.age) * effects.mortalityMultiplier * (1.8 - p.health * 0.9) * frail;
     if (ctx.rng.chance(risk)) killPerson(ctx, p, p.health < 0.35 && p.age < 55 ? "illness" : "natural");
   }
 }
@@ -95,7 +143,9 @@ export function starvationDeaths(ctx: SimContext, community: Community) {
   }
 }
 
-function related(a: Person, b: Person): boolean {
+/** Blocks siblings, half-siblings and parent/child pairs, in either direction. */
+export function related(a: Person, b: Person): boolean {
+  if (a.id === b.id) return true;
   if (a.motherId && a.motherId === b.motherId) return true;
   if (a.fatherId && a.fatherId === b.fatherId) return true;
   return a.motherId === b.id || a.fatherId === b.id || b.motherId === a.id || b.fatherId === a.id;
@@ -259,6 +309,14 @@ export function births(
       father,
       householdId: mother.householdId,
     });
+    child.birthSettlementId = mother.settlementId;
+    child.dynastyId = father.dynastyId ?? mother.dynastyId;
+    child.prestige = round(clamp((mother.prestige + father.prestige) * 0.3));
+    child.wealth = 0;
+    educate(child, {
+      education: (mother.education + father.education) / 2,
+      knowledge: Math.min(1, community.tribe.techs.length * 0.05),
+    });
     mother.lastChildYear = ctx.state.year;
     newborns.push(child);
     ctx.counters.births++;
@@ -280,24 +338,6 @@ export function births(
   return newborns;
 }
 
-export function ensureLeader(ctx: SimContext, tribe: Tribe, members: Person[]) {
-  const current = tribe.leaderId ? ctx.people.get(tribe.leaderId) : undefined;
-  if (current?.alive && current.tribeId === tribe.id) return;
-  const candidates = members.filter((p) => p.alive && p.age >= 20 && p.age < 65);
-  if (candidates.length === 0) {
-    tribe.leaderId = null;
-    return;
-  }
-  const score = (p: Person) =>
-    p.personality.cooperation * 0.35 +
-    p.personality.sociability * 0.25 +
-    ((p.skills.hunting + p.skills.building + p.skills.combat) / 3) * 0.25 +
-    Math.min(1, p.age / 45) * 0.15;
-  const leader = candidates.reduce((best, p) => (score(p) > score(best) ? p : best));
-  tribe.leaderId = leader.id;
-  leader.notable = true;
-}
-
 const MILESTONES = [50, 100, 200, 400, 800] as const;
 
 export function checkPopulationMilestone(ctx: SimContext, tribe: Tribe, population: number) {
@@ -314,4 +354,25 @@ export function checkPopulationMilestone(ctx: SimContext, tribe: Tribe, populati
     description: `La popolazione della tribù ${tribe.name} ha superato le ${next} persone (${population} oggi).`,
     metadata: { population, milestone: next },
   });
+}
+
+/** Children learn from the adults around them: education slowly compounds across generations. */
+export function educateCommunity(community: Community) {
+  const adults = community.members.filter((p) => p.alive && p.age >= AGE.adult);
+  if (adults.length === 0) return;
+  const education = adults.reduce((acc, p) => acc + p.education, 0) / adults.length;
+  const knowledge = Math.min(1, community.tribe.techs.length * 0.05);
+  for (const p of community.members) {
+    if (p.alive && p.age < 26) educate(p, { education, knowledge });
+  }
+}
+
+/** Prestige drifts: it grows with age and deeds, and decays for those who do nothing. */
+export function updatePrestige(community: Community) {
+  for (const p of community.members) {
+    if (!p.alive || p.age < AGE.adult) continue;
+    const working = p.action !== "rest" && p.action !== "socialize";
+    const delta = (working ? 0.004 : -0.002) + (p.role === "leader" ? 0.01 : 0) + p.skills.leadership * 0.002;
+    p.prestige = round(clamp(p.prestige + delta - 0.003));
+  }
 }

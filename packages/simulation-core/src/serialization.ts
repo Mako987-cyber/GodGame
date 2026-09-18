@@ -1,6 +1,17 @@
+import { migrateState, SIMULATION_VERSION } from "./normalize";
 import type { WorldState } from "./types";
 
-export const STATE_VERSION = 1;
+/**
+ * Serialization format version. Bumping it never breaks an existing world: anything older
+ * is run through `migrateState`, which fills the fields introduced later with deterministic
+ * defaults (see `normalize.ts`).
+ */
+export const STATE_VERSION = 2;
+
+/** Oldest format this build can still read. */
+export const MIN_SUPPORTED_STATE_VERSION = 1;
+
+export { SIMULATION_VERSION };
 
 export interface SerializedWorld {
   version: number;
@@ -13,9 +24,21 @@ export function serializeWorld(state: WorldState): string {
 
 export function deserializeWorld(json: string): WorldState {
   const parsed = JSON.parse(json) as SerializedWorld;
-  if (parsed.version !== STATE_VERSION)
+  return deserializeState(parsed);
+}
+
+/** Accepts any state produced by a supported version and returns a fully normalized one. */
+export function deserializeState(parsed: SerializedWorld): WorldState {
+  const version = Number(parsed.version ?? 1);
+  if (!Number.isFinite(version) || version < MIN_SUPPORTED_STATE_VERSION) {
     throw new Error(`Versione di stato non supportata: ${parsed.version}`);
-  return normalizeState(parsed.state);
+  }
+  if (version > STATE_VERSION) {
+    throw new Error(
+      `Lo stato è stato salvato da una versione più recente del motore (${version} > ${STATE_VERSION})`,
+    );
+  }
+  return normalizeState(migrateState(parsed.state));
 }
 
 export function cloneWorld(state: WorldState): WorldState {
@@ -34,6 +57,12 @@ export function normalizeState(state: WorldState): WorldState {
   state.civilizations.sort((a, b) => a.seq - b.seq);
   state.households.sort((a, b) => a.seq - b.seq);
   state.relationships.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  state.dynasties ??= [];
+  state.dynasties.sort((a, b) => a.seq - b.seq);
+  state.crises ??= [];
+  state.crises.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  state.climate.hazards ??= [];
+  state.climate.hazards.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   state.archive ??= { people: [], households: [] };
   return state;
 }

@@ -113,10 +113,11 @@ describe("persistenza", () => {
     const important = await getEventsService(world.id, { page: 1, pageSize: 100, minImportance: 3 }, deps);
     expect(important.items.every((e) => e.importance >= 3)).toBe(true);
 
-    const stats = await getStatsService(world.id, 50, deps);
-    expect(stats[0]!.tick).toBe(0);
-    expect(stats.at(-1)!.tick).toBe(100);
-    expect(stats.length).toBeLessThanOrEqual(52);
+    const stats = await getStatsService(world.id, 50, { civilizations: true }, deps);
+    expect(stats.world[0]!.tick).toBe(0);
+    expect(stats.world.at(-1)!.tick).toBe(100);
+    expect(stats.world.length).toBeLessThanOrEqual(52);
+    expect(stats.world.every((s) => Number.isFinite(s.foodSurplus))).toBe(true);
 
     const detail = await getWorldDetailService(world.id, deps);
     expect(detail.world.currentTick).toBe(100);

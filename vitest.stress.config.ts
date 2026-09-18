@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+/** Stress suite of the simulation engine: long runs, invariants after every tick. */
 export default defineConfig({
   resolve: {
     alias: {
@@ -11,10 +12,9 @@ export default defineConfig({
     },
   },
   test: {
-    // The stress suite runs separately: `npm run test:simulation`.
-    include: ["packages/**/tests/**/*.test.ts", "tests/**/*.test.ts"],
-    exclude: ["**/node_modules/**", "packages/**/tests/stress/**"],
+    include: ["packages/**/tests/stress/**/*.test.ts"],
     environment: "node",
-    testTimeout: 60_000,
+    testTimeout: 300_000,
+    hookTimeout: 120_000,
   },
 });

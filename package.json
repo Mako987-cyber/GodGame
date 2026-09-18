@@ -20,7 +20,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "sim:run": "tsx scripts/run-simulation.ts"
+    "sim:run": "tsx scripts/run-simulation.ts",
+    "test:simulation": "vitest run --config vitest.stress.config.ts",
+    "test:all": "npm run test && npm run test:simulation"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.103.1",

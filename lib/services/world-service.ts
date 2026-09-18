@@ -1,9 +1,23 @@
-import { BIOMES, createWorld, runSimulation, TECHNOLOGIES } from "@genesis/simulation-core";
+import {
+  BIOMES,
+  bundleEntries,
+  createWorld,
+  deriveCulture,
+  initialStability,
+  missingResources,
+  normalizeStock,
+  runSimulation,
+  TECHNOLOGIES,
+  tierFromLevel,
+  type ResourceBundle,
+} from "@genesis/simulation-core";
 import { getDb, type Database } from "@/lib/db";
 import { PostgresSimulationLock, type SimulationLock } from "@/lib/db/lock";
 import {
   deleteWorldRow,
+  getCivilizationStatsSeries,
   getLatestSnapshot,
+  getPersonDetail,
   getStatsSeries,
   getWorldEntities,
   getWorldRow,
@@ -16,14 +30,17 @@ import {
   updateWorldStatus,
 } from "@/lib/db/queries";
 import type { EventRow, WorldRow } from "@/lib/db/schema";
+import * as schema from "@/lib/db/schema";
 import { simulationConfig } from "@/lib/config";
 import type {
   CivilizationDTO,
   EventDTO,
   EventsPage,
   MapLayers,
+  PersonDTO,
+  SettlementDTO,
   SimulateResponse,
-  StatsPoint,
+  StatsResponse,
   WorldDetail,
   WorldListItem,
 } from "@/lib/dto";
@@ -69,6 +86,8 @@ export function toEventDTO(e: EventRow | EventDTO): EventDTO {
     tick: e.tick,
     year: e.year,
     type: e.type,
+    subtype: e.subtype ?? null,
+    causeEventIds: e.causeEventIds ?? [],
     importance: e.importance,
     actors: e.actors,
     x: e.x,
@@ -114,8 +133,17 @@ export async function getWorldDetailService(
     getWorldEntities(db, worldId),
     getLatestSnapshot(db, worldId),
   ]);
-  const { cells, tribes, settlements, civilizations, relationships, populations, notable, techRows } =
-    entities;
+  const {
+    cells,
+    tribes,
+    settlements,
+    civilizations,
+    relationships,
+    populations,
+    notable,
+    techRows,
+    dynasties,
+  } = entities;
 
   const tribeIndex = new Map(tribes.map((t, i) => [t.id, i]));
   const settlementIndex = new Map(settlements.map((s, i) => [s.id, i]));
@@ -139,6 +167,10 @@ export async function getWorldDetailService(
     coastal: layer(),
     road: layer(),
     fields: layer(),
+    pastures: layer(),
+    clay: layer(),
+    tin: layer(),
+    coal: layer(),
     owner: new Array<number>(size).fill(-1),
     settlement: new Array<number>(size).fill(-1),
     population: layer(),
@@ -163,6 +195,10 @@ export async function getWorldDetailService(
     map.coastal[i] = c.coastal ? 1 : 0;
     map.road[i] = c.road ? 1 : 0;
     map.fields[i] = c.fields;
+    map.pastures[i] = c.pastures ?? 0;
+    map.clay[i] = round2(c.clay ?? 0);
+    map.tin[i] = round2(c.tin ?? 0);
+    map.coal[i] = round2(c.coal ?? 0);
     map.owner[i] = c.ownerTribeId ? (tribeIndex.get(c.ownerTribeId) ?? -1) : -1;
     map.settlement[i] = c.settlementId ? (settlementIndex.get(c.settlementId) ?? -1) : -1;
     if (c.riverName) map.riverNames[i] = c.riverName;
@@ -214,12 +250,31 @@ export async function getWorldDetailService(
     world: {
       ...toListItem(row),
       settings: row.settings,
-      climate: { modifier: row.climate.modifier, droughts: row.climate.droughts.length },
+      simulationVersion: row.simulationVersion ?? 1,
+      climate: {
+        modifier: row.climate.modifier,
+        droughts: (row.climate.hazards ?? []).filter((h) => h.kind === "drought").length,
+        trend: row.climate.trend ?? 0,
+        harshWinter: row.climate.harshWinter ?? false,
+        winterSeverity: row.climate.winterSeverity ?? 0.5,
+        seasons: row.climate.seasons ?? [],
+        hazards: (row.climate.hazards ?? []).map((h) => ({
+          id: h.id,
+          kind: h.kind,
+          x: h.x,
+          y: h.y,
+          radius: h.radius,
+          severity: h.severity,
+        })),
+      },
     },
     map,
     tribes: tribes.map((t) => {
       const leader = t.leaderId ? people.get(t.leaderId) : undefined;
       const agg = byTribe.get(t.id) ?? { population: 0, adults: 0, children: 0 };
+      const dynasty = t.dynastyId
+        ? dynasties.find((d: (typeof dynasties)[number]) => d.id === t.dynastyId)
+        : undefined;
       return {
         id: t.id,
         name: t.name,
@@ -228,14 +283,16 @@ export async function getWorldDetailService(
         x: t.x,
         y: t.y,
         ...agg,
-        stock: {
+        stock: normalizeStock({
           food: round2(t.food),
           wood: round2(t.wood),
           stone: round2(t.stone),
           copper: round2(t.copper),
-        },
+          goods: t.goods,
+        }),
         techs: t.techs,
         techProgress: t.techProgress,
+        techAdoption: t.techAdoption ?? {},
         civilizationId: t.civilizationId,
         leader: leader ? { id: leader.id, name: leader.name, age: leader.age } : null,
         foundedYear: t.foundedYear,
@@ -245,6 +302,13 @@ export async function getWorldDetailService(
         lastFoodProduced: t.lastFoodProduced,
         scarcityYears: t.scarcityYears,
         parentTribeId: t.parentTribeId,
+        culture: t.culture ?? deriveCulture(row.seed, t.id),
+        government: t.government ?? "clan",
+        stability: t.stability ?? initialStability(),
+        distribution: t.distribution ?? "egalitarian",
+        dynasty: dynasty
+          ? { id: dynasty.id, name: dynasty.name, rulers: dynasty.rulers, prestige: dynasty.prestige }
+          : null,
       };
     }),
     settlements: settlements.map((s) => ({
@@ -255,20 +319,32 @@ export async function getWorldDetailService(
       x: s.x,
       y: s.y,
       level: s.level,
+      tier: (s.tier as SettlementDTO["tier"]) ?? tierFromLevel(s.level),
       status: s.status,
       population: s.status === "active" ? (bySettlement.get(s.id) ?? 0) : 0,
-      stock: { food: round2(s.food), wood: round2(s.wood), stone: round2(s.stone), copper: round2(s.copper) },
+      stock: normalizeStock({
+        food: round2(s.food),
+        wood: round2(s.wood),
+        stone: round2(s.stone),
+        copper: round2(s.copper),
+        goods: s.goods,
+      }),
       buildings: s.buildings,
-      construction: s.construction
-        ? { type: s.construction.type, progress: s.construction.progress, required: s.construction.required }
-        : null,
+      construction: s.construction ? toConstructionDTO(s) : null,
       defense: s.defense,
       territoryRadius: s.territoryRadius,
       foundedYear: s.foundedYear,
       abandonedYear: s.abandonedYear,
-      lastProduction: s.lastProduction,
+      lastProduction: normalizeStock(s.lastProduction),
       lastFoodRatio: s.lastFoodRatio,
       famineYears: s.famineYears,
+      hygiene: s.hygiene ?? 0.8,
+      unrest: s.unrest ?? 0,
+      influence: s.influence ?? 1,
+      founderId: s.founderId ?? null,
+      epidemic: (row.crises ?? []).some(
+        (c) => c.kind === "epidemic" && c.targetId === s.id && c.untilYear >= row.currentYear,
+      ),
     })),
     civilizations: civDTOs,
     relationships: relationships.map((r) => ({
@@ -283,14 +359,24 @@ export async function getWorldDetailService(
       distance: r.distance,
       warStartYear: r.warStartYear,
       battles: r.battles,
+      respect: r.respect ?? 0,
+      tradeDependency: r.tradeDependency ?? 0,
+      culturalDistance: r.culturalDistance ?? 0,
+      status: r.status ?? "contact",
+      phase: r.phase ?? "peace",
+      lastConflictYear: r.lastConflictYear ?? null,
     })),
     technologies: TECHNOLOGIES.map((t) => ({
       id: t.id,
       name: t.name,
+      category: t.category,
       description: t.description,
       prerequisites: t.prerequisites,
       cost: t.cost,
       effectSummary: t.effectSummary,
+      resourceRequirement: t.resourceRequirement,
+      geographyRequirement: t.geographyRequirement,
+      tradeOff: t.tradeOff,
     })),
     discoveries: techRows.map((r) => ({
       tribeId: r.tribeId,
@@ -298,7 +384,68 @@ export async function getWorldDetailService(
       year: r.discoveredYear,
       method: r.method,
     })),
+    dynasties: dynasties.map((d: (typeof dynasties)[number]) => ({
+      id: d.id,
+      name: d.name,
+      tribeId: d.tribeId,
+      founderId: d.founderId,
+      foundedYear: d.foundedYear,
+      endedYear: d.endedYear,
+      prestige: d.prestige,
+      rulers: d.rulers,
+    })),
+    crises: (row.crises ?? [])
+      .filter((c) => c.untilYear >= row.currentYear)
+      .map((c) => ({
+        id: c.id,
+        kind: c.kind,
+        scope: c.scope,
+        targetId: c.targetId,
+        startYear: c.startYear,
+        untilYear: c.untilYear,
+        severity: c.severity,
+      })),
+    notablePeople: notable
+      .slice()
+      .sort((a, b) => (b.prestige ?? 0) - (a.prestige ?? 0))
+      .slice(0, 60)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        tribeId: p.tribeId,
+        age: p.age,
+        role: p.role,
+        title: p.title ?? null,
+        prestige: round2(p.prestige ?? 0),
+      })),
     lastSnapshot: snapshot ? { tick: snapshot.tick, year: snapshot.year } : null,
+  };
+}
+
+/** Construction sites are shown with what they still need, not just a progress bar. */
+function toConstructionDTO(s: typeof schema.settlements.$inferSelect) {
+  const project = s.construction;
+  if (!project) return null;
+  const stock = normalizeStock({
+    food: s.food,
+    wood: s.wood,
+    stone: s.stone,
+    copper: s.copper,
+    goods: s.goods,
+  });
+  const outstanding: ResourceBundle = {};
+  for (const [kind, amount] of bundleEntries(project.requiredResources ?? {})) {
+    const delivered = project.deliveredResources?.[kind] ?? 0;
+    if (amount - delivered > 0.001) outstanding[kind] = round2(amount - delivered);
+  }
+  const missing = missingResources(stock, outstanding);
+  return {
+    type: project.buildingType ?? project.type ?? "hut",
+    progress: round2(project.laborCompleted ?? project.progress ?? 0),
+    required: round2(project.laborRequired ?? project.required ?? 1),
+    status: project.status ?? "building",
+    missing: Object.fromEntries(bundleEntries(missing)),
+    startedAtTick: project.startedAtTick ?? 0,
   };
 }
 
@@ -330,6 +477,10 @@ export async function getEventsService(
     pageSize: query.pageSize,
     types: query.type,
     minImportance: query.minImportance,
+    search: query.search,
+    fromYear: query.fromYear,
+    toYear: query.toYear,
+    actorId: query.actorId,
   });
   return {
     items: items.map(toEventDTO),
@@ -340,16 +491,74 @@ export async function getEventsService(
   };
 }
 
+/** World series plus, optionally, the per-civilization ones used by the comparison charts. */
 export async function getStatsService(
   worldId: string,
   maxPoints: number,
+  options: { civilizations?: boolean } = {},
   deps?: Pick<ServiceDeps, "db">,
-): Promise<StatsPoint[]> {
+): Promise<StatsResponse> {
   const { db } = deps ?? (await defaultDeps());
   const row = await getWorldRow(db, worldId);
   if (!row) throw notFound();
-  const rows = await getStatsSeries(db, worldId, row.currentTick, maxPoints);
-  return rows.map(({ worldId: _w, ...rest }) => rest);
+  const [rows, civRows] = await Promise.all([
+    getStatsSeries(db, worldId, row.currentTick, maxPoints),
+    options.civilizations
+      ? getCivilizationStatsSeries(db, worldId, row.currentTick, maxPoints)
+      : Promise.resolve([]),
+  ]);
+  return {
+    world: rows.map(({ worldId: _w, ...rest }) => rest),
+    civilizations: civRows.map(({ worldId: _w, ...rest }) => rest),
+  };
+}
+
+/** Detail of one person: family, standing, and the events they took part in. */
+export async function getPersonService(
+  worldId: string,
+  personId: string,
+  deps?: Pick<ServiceDeps, "db">,
+): Promise<PersonDTO> {
+  const { db } = deps ?? (await defaultDeps());
+  if (!(await getWorldRow(db, worldId))) throw notFound();
+  const detail = await getPersonDetail(db, worldId, personId);
+  if (!detail) throw notFound("Persona");
+  const p = detail.person;
+  return {
+    id: p.id,
+    name: p.name,
+    tribeId: p.tribeId,
+    tribeName: detail.tribe?.name ?? null,
+    settlementId: p.settlementId,
+    settlementName: detail.settlement?.name ?? null,
+    sex: p.sex,
+    age: p.age,
+    birthYear: p.birthYear,
+    alive: p.alive,
+    deathYear: p.deathYear,
+    deathCause: p.deathCause,
+    role: p.role,
+    action: p.action,
+    health: round2(p.health),
+    hunger: round2(p.hunger),
+    prestige: round2(p.prestige ?? 0),
+    education: round2(p.education ?? 0),
+    wealth: round2(p.wealth ?? 0),
+    title: p.title ?? null,
+    titleSinceYear: p.titleSinceYear ?? null,
+    notable: p.notable,
+    dynasty: detail.dynasty ? { id: detail.dynasty.id, name: detail.dynasty.name } : null,
+    skills: p.skills as unknown as Record<string, number>,
+    personality: p.personality as unknown as Record<string, number>,
+    knowledge: p.knowledge,
+    family: {
+      mother: detail.mother,
+      father: detail.father,
+      partner: detail.partner,
+      children: detail.children,
+    },
+    events: detail.events.map(toEventDTO),
+  };
 }
 
 function isPostgresError(error: unknown): error is { code: string; message: string } {
@@ -412,7 +621,16 @@ export async function simulateWorldService(
     const summary = await db.transaction((tx) => persistSimulation(tx, loaded, result));
     const durationMs = Date.now() - started;
     const sum = (
-      k: "births" | "deaths" | "starvationDeaths" | "conflictDeaths" | "battles" | "foodProduced",
+      k:
+        | "births"
+        | "deaths"
+        | "starvationDeaths"
+        | "conflictDeaths"
+        | "battles"
+        | "foodProduced"
+        | "epidemicDeaths"
+        | "migrations"
+        | "tradeVolume",
     ) => Math.round(result.stats.reduce((acc, st) => acc + st[k], 0) * 10) / 10;
 
     logger.info("simulate.batch", {
@@ -464,6 +682,9 @@ export async function simulateWorldService(
         foodProduced: sum("foodProduced"),
         population: loaded.state.people.length,
         populationDelta: loaded.state.people.length - populationBefore,
+        epidemicDeaths: sum("epidemicDeaths"),
+        migrations: sum("migrations"),
+        tradeVolume: sum("tradeVolume"),
       },
     };
   } catch (error) {

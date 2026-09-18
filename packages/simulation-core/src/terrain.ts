@@ -87,6 +87,9 @@ export function generateTerrain(seed: string, width: number, height: number): Ce
         maxFauna: 0,
         copper: 0,
         iron: 0,
+        clay: 0,
+        tin: 0,
+        coal: 0,
         habitability: 0,
         river: false,
         riverName: null,
@@ -95,6 +98,7 @@ export function generateTerrain(seed: string, width: number, height: number): Ce
         settlementId: null,
         road: false,
         fields: 0,
+        pastures: 0,
       });
     }
   }
@@ -131,6 +135,21 @@ export function generateTerrain(seed: string, width: number, height: number): Ce
       cell.copper = mineralRng.int(40, 100);
     }
     if (cell.biome === "mountain" && mineralRng.chance(0.1)) cell.iron = mineralRng.int(30, 90);
+    // Tin is rare and only pairs with highlands: bronze will often require trade.
+    if ((cell.biome === "hills" || cell.biome === "mountain") && mineralRng.chance(0.05)) {
+      cell.tin = mineralRng.int(20, 60);
+    }
+    // Clay follows water: riverbanks, coasts and damp plains.
+    if ((cell.river || cell.coastal || cell.moisture > 0.55) && mineralRng.chance(0.3)) {
+      cell.clay = mineralRng.int(30, 90);
+    }
+    // Peat and coal: mountains, hills and wet forests.
+    if (
+      (cell.biome === "mountain" || cell.biome === "hills" || cell.biome === "forest") &&
+      mineralRng.chance(0.08)
+    ) {
+      cell.coal = mineralRng.int(25, 80);
+    }
     cell.habitability = computeHabitability(cell);
   }
   return cells;

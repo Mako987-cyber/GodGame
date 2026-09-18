@@ -1,4 +1,8 @@
+import type { DistributionPolicy, Season, SimulationConfig } from "./config";
 import type { RngState } from "./prng";
+import type { GoodsBag, ResourceBundle, Stockpile } from "./stock";
+
+export type { Stockpile, ResourceBundle, GoodsBag };
 
 export type Biome = "ocean" | "coast" | "plains" | "forest" | "hills" | "mountain" | "desert" | "tundra";
 
@@ -22,6 +26,10 @@ export interface Cell {
   maxFauna: number;
   copper: number;
   iron: number;
+  /** Deposits introduced with the extended economy; derived on load for pre-existing worlds. */
+  clay: number;
+  tin: number;
+  coal: number;
   habitability: number;
   river: boolean;
   riverName: string | null;
@@ -31,11 +39,43 @@ export interface Cell {
   road: boolean;
   /** Number of farm fields worked on this cell. */
   fields: number;
+  /** Number of pastures worked on this cell. */
+  pastures: number;
+}
+
+/** Climate profile of a cell, derived deterministically from terrain: never persisted. */
+export interface CellClimate {
+  /** Mean annual temperature, 0 (polar) .. 1 (tropical). */
+  baseTemperature: number;
+  /** Half-amplitude of the seasonal temperature swing. */
+  seasonalRange: number;
+  /** Mean annual precipitation, 0..1. */
+  precipitation: number;
+  /** How hard winter hits here, 0..1. */
+  winterSeverity: number;
+  /** How dry the place is, 0..1. */
+  aridity: number;
+  /** Probability weight of a wildfire, 0..1. */
+  fireRisk: number;
+  /** Probability weight of a flood, 0..1. */
+  floodRisk: number;
 }
 
 export type Sex = "M" | "F";
 
-export type Role = "child" | "gatherer" | "hunter" | "builder" | "elder" | "leader" | "farmer" | "warrior";
+export type Role =
+  | "child"
+  | "gatherer"
+  | "hunter"
+  | "builder"
+  | "elder"
+  | "leader"
+  | "farmer"
+  | "warrior"
+  | "herder"
+  | "fisher"
+  | "miner"
+  | "crafter";
 
 export type Action =
   | "rest"
@@ -47,7 +87,11 @@ export type Action =
   | "socialize"
   | "join_group"
   | "reproduce"
-  | "defend";
+  | "defend"
+  | "herd"
+  | "fish"
+  | "mine"
+  | "craft";
 
 export interface Skills {
   gathering: number;
@@ -55,6 +99,8 @@ export interface Skills {
   building: number;
   combat: number;
   crafting: number;
+  /** Added with the leadership model; defaults to the average of the others when missing. */
+  leadership: number;
 }
 
 export interface Personality {
@@ -65,7 +111,10 @@ export interface Personality {
   sociability: number;
 }
 
-export type DeathCause = "natural" | "starvation" | "conflict" | "illness";
+export type DeathCause = "natural" | "starvation" | "conflict" | "illness" | "epidemic" | "disaster";
+
+/** Public role a person holds inside their group. */
+export type PersonTitle = "chief" | "elder" | "commander" | "founder" | "ruler" | "inventor";
 
 export interface Person {
   id: string;
@@ -95,16 +144,48 @@ export interface Person {
   knowledge: string[];
   lastChildYear: number | null;
   notable: boolean;
-}
-
-export interface Stockpile {
-  food: number;
-  wood: number;
-  stone: number;
-  copper: number;
+  /** Social standing, 0..1: grows with deeds, inherited in part from the parents. */
+  prestige: number;
+  /** Accumulated knowledge, 0..1: raises innovation and leadership quality. */
+  education: number;
+  /** Personal movable wealth; inherited by children and partner on death. */
+  wealth: number;
+  birthSettlementId: string | null;
+  dynastyId: string | null;
+  title: PersonTitle | null;
+  titleSinceYear: number | null;
 }
 
 export type TribeStatus = "nomadic" | "settled" | "extinct";
+
+/** Culture traits, each normalized 0..100. Procedurally generated: never modelled on real peoples. */
+export interface CultureTraits {
+  cooperation: number;
+  militarism: number;
+  tradeOpenness: number;
+  traditionalism: number;
+  centralization: number;
+  hierarchy: number;
+  spirituality: number;
+  innovation: number;
+  expansionism: number;
+}
+
+export type GovernmentType =
+  "clan" | "elder_council" | "chiefdom" | "tribal_monarchy" | "city_state" | "merchant_republic";
+
+/** Internal stability indicators, each 0..1 (except unrestYears). */
+export interface Stability {
+  happiness: number;
+  cohesion: number;
+  legitimacy: number;
+  tension: number;
+  order: number;
+  corruption: number;
+  revoltRisk: number;
+  /** Consecutive years spent above the revolt threshold. */
+  unrestYears: number;
+}
 
 export interface Tribe {
   id: string;
@@ -117,6 +198,8 @@ export interface Tribe {
   stock: Stockpile;
   techs: string[];
   techProgress: Record<string, number>;
+  /** Adoption progress (0..1) of technologies already known but not yet fully in use. */
+  techAdoption: Record<string, number>;
   yearsAtLocation: number;
   scarcityYears: number;
   foundedYear: number;
@@ -130,19 +213,69 @@ export interface Tribe {
   lastFoodConsumed: number;
   /** Food ratio (eaten / needed) of the band in the previous year. */
   lastFoodRatio: number;
+  culture: CultureTraits;
+  government: GovernmentType;
+  stability: Stability;
+  distribution: DistributionPolicy;
+  dynastyId: string | null;
+  lastLeaderChangeYear: number | null;
 }
 
-export type BuildingType = "camp" | "hut" | "storehouse" | "farm" | "road" | "palisade";
+export interface Dynasty {
+  id: string;
+  seq: number;
+  name: string;
+  tribeId: string;
+  founderId: string;
+  foundedYear: number;
+  endedYear: number | null;
+  prestige: number;
+  rulers: number;
+}
+
+export type BuildingType =
+  | "camp"
+  | "hut"
+  | "storehouse"
+  | "farm"
+  | "road"
+  | "palisade"
+  | "pasture"
+  | "well"
+  | "quarry"
+  | "mine"
+  | "kiln"
+  | "foundry"
+  | "market"
+  | "temple"
+  | "barracks"
+  | "walls"
+  | "port";
+
+export type ConstructionStatus = "planned" | "building" | "paused" | "completed" | "abandoned";
 
 export interface ConstructionProject {
-  type: BuildingType;
-  progress: number;
-  required: number;
-  /** For roads: target settlement id. */
+  id: string;
+  settlementId: string;
+  buildingType: BuildingType;
+  cellId: string;
+  requiredResources: ResourceBundle;
+  deliveredResources: ResourceBundle;
+  laborRequired: number;
+  laborCompleted: number;
+  startedAtTick: number;
+  status: ConstructionStatus;
+  /** For roads and ports: the settlement the work connects to. */
   targetId: string | null;
+  /** Legacy alias of buildingType, kept so older snapshots keep deserializing. */
+  type?: BuildingType;
+  progress?: number;
+  required?: number;
 }
 
 export type SettlementStatus = "active" | "abandoned";
+
+export type SettlementTier = "camp" | "village" | "town" | "city_state" | "capital";
 
 export interface Settlement {
   id: string;
@@ -153,6 +286,7 @@ export interface Settlement {
   x: number;
   y: number;
   level: number;
+  tier: SettlementTier;
   status: SettlementStatus;
   foundedYear: number;
   abandonedYear: number | null;
@@ -166,6 +300,15 @@ export interface Settlement {
   lastProduction: Stockpile;
   lastFoodRatio: number;
   population: number;
+  /** Sanitary conditions, 0..1: falls with density, rises with wells and knowledge. */
+  hygiene: number;
+  /** Local discontent, 0..1. */
+  unrest: number;
+  /** Political weight used to claim territory. */
+  influence: number;
+  founderId: string | null;
+  /** Years since the last epidemic, used to avoid repeated outbreaks. */
+  lastEpidemicYear: number | null;
 }
 
 export interface Civilization {
@@ -188,6 +331,12 @@ export interface Household {
   dissolvedYear: number | null;
 }
 
+export type DiplomaticStatus =
+  "unknown" | "contact" | "neutral" | "trade_partner" | "allied" | "rival" | "war" | "truce";
+
+/** Escalation ladder walked before an actual war breaks out. */
+export type ConflictPhase = "peace" | "tension" | "demand" | "threat" | "raid" | "war" | "truce";
+
 export interface Relationship {
   /** `${aId}|${bId}` with aId < bId (by tribe seq). */
   id: string;
@@ -205,6 +354,16 @@ export interface Relationship {
   battles: number;
   /** No new war can be declared before this year (set when peace is made). */
   truceUntilYear: number | null;
+  respect: number;
+  /** How much each side depends on the exchange, 0..1. */
+  tradeDependency: number;
+  /** Distance between the two cultures, 0..1. */
+  culturalDistance: number;
+  status: DiplomaticStatus;
+  phase: ConflictPhase;
+  lastConflictYear: number | null;
+  /** Years the pair has spent in the current phase. */
+  phaseYears: number;
 }
 
 export type EventType =
@@ -224,9 +383,15 @@ export type EventType =
   | "civilization_founded"
   | "alliance"
   | "tribe_extinct"
-  | "conquest";
+  | "conquest"
+  | "climate"
+  | "epidemic"
+  | "leadership"
+  | "unrest"
+  | "culture"
+  | "settlement_growth";
 
-export type ActorKind = "tribe" | "settlement" | "civilization" | "person";
+export type ActorKind = "tribe" | "settlement" | "civilization" | "person" | "dynasty";
 
 export interface EventActor {
   kind: ActorKind;
@@ -242,6 +407,8 @@ export interface HistoricalEvent {
   tick: number;
   year: number;
   type: EventType;
+  /** Free-form discriminator inside a type (e.g. "drought", "succession"). */
+  subtype: string | null;
   importance: 1 | 2 | 3 | 4 | 5;
   actors: EventActor[];
   x: number | null;
@@ -249,19 +416,61 @@ export interface HistoricalEvent {
   title: string;
   description: string;
   metadata: Record<string, JsonValue>;
+  /** Ids of the events that directly caused this one. */
+  causeEventIds: string[];
 }
 
-export interface Drought {
+export type HazardKind = "drought" | "flood" | "wildfire";
+
+export interface Hazard {
+  id: string;
+  kind: HazardKind;
   x: number;
   y: number;
   radius: number;
   severity: number;
+  startYear: number;
   untilYear: number;
+  /** Event that announced the hazard, used to chain consequences to their cause. */
+  eventId: string | null;
+}
+
+/** Deterministic per-season summary of a simulated year. */
+export interface SeasonState {
+  season: Season;
+  /** Global temperature index of the season, 0..1. */
+  temperature: number;
+  /** Global precipitation index of the season, 0..1. */
+  precipitation: number;
+  /** Multiplier applied to food production during the season. */
+  yield: number;
 }
 
 export interface Climate {
   modifier: number;
-  droughts: Drought[];
+  /** Legacy field kept for compatibility: droughts are now hazards. */
+  droughts: { x: number; y: number; radius: number; severity: number; untilYear: number }[];
+  hazards: Hazard[];
+  /** Slow multi-century drift of the global temperature, -1..1. */
+  trend: number;
+  seasons: SeasonState[];
+  harshWinter: boolean;
+  /** Index of the current winter severity, 0..1. */
+  winterSeverity: number;
+}
+
+export type CrisisKind =
+  "epidemic" | "famine" | "drought" | "flood" | "wildfire" | "harsh_winter" | "revolt" | "succession";
+
+export interface ActiveCrisis {
+  id: string;
+  kind: CrisisKind;
+  scope: "world" | "tribe" | "settlement";
+  targetId: string | null;
+  startYear: number;
+  untilYear: number;
+  severity: number;
+  eventId: string | null;
 }
 
 export interface WorldSettings {
@@ -285,6 +494,9 @@ export interface Counters {
   civilization: number;
   household: number;
   event: number;
+  dynasty: number;
+  construction: number;
+  crisis: number;
 }
 
 export interface TickStats {
@@ -304,6 +516,35 @@ export interface TickStats {
   deaths: number;
   starvationDeaths: number;
   conflictDeaths: number;
+  /** Extended metrics. */
+  epidemicDeaths: number;
+  foodSurplus: number;
+  storageCapacity: number;
+  goodsProduced: number;
+  tradeVolume: number;
+  wealth: number;
+  buildings: number;
+  territory: number;
+  averageTemperature: number;
+  climateStress: number;
+  averageStability: number;
+  migrations: number;
+  season: Season;
+}
+
+/** Per-civilization time series, sampled every `observability.civStatsInterval` ticks. */
+export interface CivilizationStats {
+  tick: number;
+  year: number;
+  civilizationId: string;
+  population: number;
+  settlements: number;
+  technologies: number;
+  foodStored: number;
+  wealth: number;
+  territory: number;
+  stability: number;
+  atWar: boolean;
 }
 
 /**
@@ -322,6 +563,9 @@ export interface WorldState {
   tick: number;
   year: number;
   rng: RngState;
+  /** Engine version that produced this state; older values are migrated on load. */
+  simulationVersion: number;
+  config: SimulationConfig;
   settings: WorldSettings;
   counters: Counters;
   climate: Climate;
@@ -332,6 +576,8 @@ export interface WorldState {
   civilizations: Civilization[];
   households: Household[];
   relationships: Relationship[];
+  dynasties: Dynasty[];
+  crises: ActiveCrisis[];
   archive: Archive;
 }
 
@@ -340,4 +586,5 @@ export interface SimulationResult {
   partial: boolean;
   events: HistoricalEvent[];
   stats: TickStats[];
+  civStats: CivilizationStats[];
 }
