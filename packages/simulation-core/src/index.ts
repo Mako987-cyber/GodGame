@@ -111,6 +111,7 @@ export {
   climateAt,
   climateStress,
   computeSeasons,
+  definingSeason,
   hazardsAt,
   seasonYieldAt,
   winterConsumptionFactor,

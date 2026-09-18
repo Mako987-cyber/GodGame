@@ -2,6 +2,7 @@ import {
   BIOMES,
   bundleEntries,
   createWorld,
+  definingSeason,
   deriveCulture,
   initialStability,
   missingResources,
@@ -260,6 +261,7 @@ export async function getWorldDetailService(
         harshWinter: row.climate.harshWinter ?? false,
         winterSeverity: row.climate.winterSeverity ?? 0.5,
         seasons: row.climate.seasons ?? [],
+        definingSeason: definingSeason({ climate: row.climate } as Parameters<typeof definingSeason>[0]),
         hazards: (row.climate.hazards ?? []).map((h) => ({
           id: h.id,
           kind: h.kind,

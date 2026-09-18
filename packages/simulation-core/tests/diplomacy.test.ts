@@ -143,3 +143,34 @@ describe("diplomazia e guerra", () => {
     }
   });
 });
+
+describe("regressioni del modello", () => {
+  it("la tregua scade e la scala di tensione può ripartire", () => {
+    const state = createWorld({ seed: "tregue" });
+    const result = runSimulation(state, 400);
+    const peaces = result.events.filter((e) => e.type === "peace");
+    for (const rel of state.relationships) {
+      // An expired truce leaves no residue: neither in the label nor in the ladder.
+      if (rel.truceUntilYear !== null) expect(rel.truceUntilYear).toBeGreaterThan(state.year);
+      if (rel.status === "truce") expect(rel.truceUntilYear).not.toBeNull();
+      if (rel.phase === "truce") expect(rel.atWar || rel.truceUntilYear !== null).toBe(true);
+      expect(rel.phaseYears).toBeGreaterThanOrEqual(0);
+    }
+    // Where there was a war there is a recorded year of the last clash.
+    for (const rel of state.relationships) {
+      if (rel.battles > 0) expect(rel.lastConflictYear).not.toBeNull();
+    }
+    expect(peaces.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("i numeri nell'evento sono quelli che hanno deciso la guerra", () => {
+    const state = createWorld({ seed: "coerenza-guerra" });
+    const result = runSimulation(state, 500);
+    const declarations = result.events.filter((e) => e.subtype === "war_declared");
+    for (const e of declarations) {
+      // The gate uses the same rounded values it stores: an event always justifies its decision.
+      expect(Number(e.metadata.warScore)).toBeGreaterThan(0.6);
+      expect(Number(e.metadata.advantage)).toBeGreaterThan(1.1);
+    }
+  });
+});

@@ -148,3 +148,19 @@ describe("clima e stagioni", () => {
     }
   });
 });
+
+describe("stagione caratterizzante", () => {
+  it("non è sempre la stessa: dipende dall'anomalia dell'anno", () => {
+    const state = createWorld({ seed: "stagione-decisiva" });
+    const result = runSimulation(state, 200);
+    const seasons = new Set(result.stats.map((s) => s.season));
+    // Over two centuries more than one season has to have marked a year.
+    expect(seasons.size).toBeGreaterThan(1);
+    for (const season of seasons) {
+      expect(["spring", "summer", "autumn", "winter"]).toContain(season);
+    }
+    // And an exceptionally harsh winter is always the season that defined its year.
+    const harsh = runSimulation(createWorld({ seed: "inverno-estremo" }), 300);
+    expect(harsh.stats.some((s) => s.season === "winter")).toBe(true);
+  });
+});

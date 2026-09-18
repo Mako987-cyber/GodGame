@@ -6,8 +6,8 @@ export function WorldSummary({ detail }: { detail: WorldDetail }) {
   const { world } = detail;
   const s = world.summary;
   const climate = world.climate;
-  // The last season of the simulated year is the one the world is living through.
-  const season = climate.seasons.at(-1);
+  // A tick covers a whole year: what is worth showing is the season that marked it.
+  const season = climate.seasons.find((s) => s.season === climate.definingSeason);
   const facts: [string, string][] = [
     ["Popolazione", fmtInt(s.population)],
     ["Tribù", fmtInt(s.tribes)],
@@ -33,7 +33,7 @@ export function WorldSummary({ detail }: { detail: WorldDetail }) {
         <div className="flex flex-wrap items-center gap-2 text-sm">
           {season && (
             <Badge tone={season.season === "winter" ? "water" : "growth"}>
-              Ultima stagione: {SEASON_LABELS[season.season]}
+              Stagione decisiva: {SEASON_LABELS[season.season]}
             </Badge>
           )}
           {climate.harshWinter && <Badge tone="water">Inverno rigidissimo</Badge>}

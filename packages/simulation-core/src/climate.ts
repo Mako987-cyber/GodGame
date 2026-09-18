@@ -313,7 +313,8 @@ function spawnHazard(ctx: SimContext, kind: HazardKind, chance: number) {
             : "siccità e boschi secchi",
     },
   });
-  hazard.eventId = event.id;
+  // A suppressed event has no id: the hazard then simply has no announcement to point at.
+  hazard.eventId = event.id || null;
   state.crises.push({
     id: hazard.id,
     kind,
@@ -322,7 +323,7 @@ function spawnHazard(ctx: SimContext, kind: HazardKind, chance: number) {
     startYear: hazard.startYear,
     untilYear: hazard.untilYear,
     severity,
-    eventId: event.id,
+    eventId: event.id || null,
   });
 }
 
@@ -371,6 +372,34 @@ export function climateStress(state: WorldState): number {
   const anomaly = Math.abs(1 - state.climate.modifier);
   const hazards = state.climate.hazards.reduce((acc, h) => acc + h.severity, 0) / 3;
   return round(clamp(anomaly * 2 + hazards * 0.5 + (state.climate.harshWinter ? 0.15 : 0)), 3);
+}
+
+/**
+ * Baseline yield of each season in an average year: the reference the anomaly is measured against.
+ */
+const SEASON_BASELINE: Record<Season, number> = {
+  spring: 1.05,
+  summer: 1.15,
+  autumn: 1.1,
+  winter: 0.25,
+};
+
+/**
+ * The season that shaped the year: the one whose yield deviated most from its own norm.
+ * A tick covers all four seasons, so "the current season" would be meaningless; what is worth
+ * recording is which season made the difference (a failed summer, an unusually mild winter).
+ */
+export function definingSeason(state: WorldState): Season {
+  let best: Season = "summer";
+  let bestDeviation = -Infinity;
+  for (const season of state.climate.seasons) {
+    const deviation = Math.abs(season.yield - SEASON_BASELINE[season.season]);
+    if (deviation > bestDeviation) {
+      bestDeviation = deviation;
+      best = season.season;
+    }
+  }
+  return best;
 }
 
 export function averageTemperature(state: WorldState): number {

@@ -1,5 +1,5 @@
 import { applyActionEffects, assignRole, chooseAction, type CommunityNeeds } from "./agents";
-import { averageTemperature, climateStress, hazardsAt, updateClimate } from "./climate";
+import { averageTemperature, climateStress, definingSeason, hazardsAt, updateClimate } from "./climate";
 import { ECONOMY } from "./constants";
 import { buildIndexes, emptyCounters, type Community, type SimContext } from "./context";
 import { expireCrises, tryRevolt, updateEpidemics } from "./crises";
@@ -420,6 +420,11 @@ export function runTick(ctx: SimContext) {
 function updateSociety(ctx: SimContext) {
   const { state } = ctx;
   const config = state.config.society;
+  // Births of the year per tribe: one pass, then O(1) per tribe.
+  const birthsByTribe = new Map<string, number>();
+  for (const p of state.people) {
+    if (p.birthYear === state.year) birthsByTribe.set(p.tribeId, (birthsByTribe.get(p.tribeId) ?? 0) + 1);
+  }
   for (const tribe of tribesAlive(ctx)) {
     const comms = ctx.communities.filter((c) => c.tribe.id === tribe.id);
     const members = comms.flatMap((c) => c.members);
@@ -447,7 +452,6 @@ function updateSociety(ctx: SimContext) {
     const epidemic = state.crises.some(
       (c) => c.kind === "epidemic" && settlementsOwned.some((s) => s.settlement?.id === c.targetId),
     );
-    const previousPopulation = Math.max(1, tribe.populationMilestone || members.length);
 
     updateStability(
       tribe,
@@ -461,7 +465,8 @@ function updateSociety(ctx: SimContext) {
         settlements: settlementsOwned.length,
         spread,
         epidemic,
-        growthRate: clamp((members.length - previousPopulation) / previousPopulation, 0, 1),
+        // A group that grows too fast strains its own cohesion.
+        growthRate: clamp((birthsByTribe.get(tribe.id) ?? 0) / Math.max(1, members.length), 0, 1),
         culturalStrain,
       },
       config.stabilityInertia,
@@ -711,7 +716,7 @@ export function collectStats(ctx: SimContext): TickStats {
   }
   const territory = state.cells.reduce((acc, c) => acc + (c.ownerTribeId ? 1 : 0), 0);
   const needed = state.people.reduce((acc, p) => acc + foodNeed(p), 0);
-  const season = state.climate.seasons.at(-1)?.season ?? "winter";
+  const season = definingSeason(state);
   return {
     tick: state.tick,
     year: state.year,

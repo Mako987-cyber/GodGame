@@ -320,7 +320,7 @@ function StatsTable({ data }: { data: StatsPoint[] }) {
           <tr>
             {[
               "Anno",
-              "Stagione",
+              "Stagione decisiva",
               "Abitanti",
               "Cibo prodotto",
               "Riserve",

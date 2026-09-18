@@ -116,3 +116,23 @@ describe("insediamenti e infrastrutture", () => {
     }
   });
 });
+
+describe("stato dei cantieri", () => {
+  it("un cantiere senza materiali è in attesa, non in costruzione", () => {
+    const state = createWorld({ seed: "materiali" });
+    const result = runSimulation(state, 300);
+    void result;
+    for (const s of state.settlements) {
+      const project = s.construction;
+      if (!project) continue;
+      const missing = bundleEntries(project.requiredResources).some(
+        ([kind, amount]) => (project.deliveredResources[kind] ?? 0) + 1e-6 < amount,
+      );
+      // "paused" means exactly one thing: the materials have not arrived yet.
+      if (missing) expect(project.status).toBe("paused");
+      else expect(["building", "planned"]).toContain(project.status);
+      // Work never starts before the materials are complete.
+      if (missing) expect(project.laborCompleted).toBe(0);
+    }
+  });
+});

@@ -8,7 +8,7 @@ import { clamp, distance, round } from "./grid";
 import { areaDeposits } from "./resources";
 import { getResourceAmount } from "./stock";
 import { shareKnowledge, tribeEffects } from "./technology";
-import type { DiplomaticStatus, Relationship, Tribe } from "./types";
+import type { ConflictPhase, DiplomaticStatus, Relationship, Tribe } from "./types";
 import { combatSide, sidePower, wageConflict } from "./warfare";
 
 export interface TribeProfile {
@@ -182,34 +182,38 @@ export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProf
           });
       }
       rel.distance = pair.d;
+      const phaseBefore = rel.phase;
       updateRelationValues(rel, a, b, pair.d);
       if (pair.d > CONTACT_DISTANCE && !rel.atWar) {
-        updateStatus(rel);
+        updateStatus(rel, state.year, phaseBefore);
         continue;
       }
       decideAction(ctx, rel, a, b, pair, profiles);
-      updateStatus(rel);
+      updateStatus(rel, state.year, phaseBefore);
       roundRelationship(rel);
     }
   }
 }
 
-/** Diplomatic label derived from the underlying values, kept consistent with `atWar`/`allied`. */
-function updateStatus(rel: Relationship) {
+/**
+ * Diplomatic label derived from the underlying values, kept consistent with `atWar`/`allied`.
+ * `phaseYears` counts the years spent in the current *phase* of the escalation ladder, which is
+ * what the ladder itself gates on; an expired truce drops back to peace so a new cycle can start.
+ */
+function updateStatus(rel: Relationship, year: number, phaseBefore: ConflictPhase) {
+  const truceHolds = rel.truceUntilYear !== null && year < rel.truceUntilYear;
+  if (!truceHolds && rel.phase === "truce" && !rel.atWar) rel.phase = "peace";
+
   let status: DiplomaticStatus;
   if (rel.atWar) status = "war";
-  else if (rel.truceUntilYear !== null && rel.truceUntilYear > rel.lastInteractionYear) status = "truce";
+  else if (truceHolds) status = "truce";
   else if (rel.allied) status = "allied";
   else if (rel.hostility > 0.5 && rel.trust < 0.3) status = "rival";
   else if (rel.tradeVolume > 20 && rel.trust > 0.25) status = "trade_partner";
   else if (rel.lastInteractionYear !== 0) status = rel.trust > 0.15 ? "neutral" : "contact";
   else status = "contact";
-  if (rel.status !== status) {
-    rel.status = status;
-    rel.phaseYears = 0;
-  } else {
-    rel.phaseYears += 1;
-  }
+  rel.status = status;
+  rel.phaseYears = rel.phase === phaseBefore ? rel.phaseYears + 1 : 0;
 }
 
 function updateRelationValues(rel: Relationship, a: TribeProfile, b: TribeProfile, d: number) {
@@ -337,12 +341,15 @@ function decideAction(
     (y.population < x.population * 0.6 ? 0.2 : 0) -
     rel.trust * 0.8;
   const [att, def] = motive(a, b) >= motive(b, a) ? [a, b] : [b, a];
-  const warScore = motive(att, def);
-  const advantage = att.power / Math.max(1, def.power);
+  // Rounded here so the thresholds below and the numbers stored in the event are the same
+  // value: an event must always justify the decision that produced it.
+  const warScore = round(motive(att, def), 2);
+  const advantage = round(att.power / Math.max(1, def.power), 2);
   const target = att === a ? pair.cb : pair.ca;
 
   // --- Escalation ladder: tension → demand → threat → war -------------------
   const truceHolds = rel.truceUntilYear !== null && state.year < rel.truceUntilYear;
+  if (!truceHolds && rel.truceUntilYear !== null) rel.truceUntilYear = null;
   if (!truceHolds) {
     if (warScore > 0.3 && rel.phase === "peace") {
       rel.phase = "tension";
@@ -393,7 +400,7 @@ function decideAction(
         y: target.y,
         title: `Minaccia di guerra: ${att.tribe.name} contro ${def.tribe.name}`,
         description: `Respinte le richieste, i ${att.tribe.name} radunano i guerrieri lungo il confine con i ${def.tribe.name}.`,
-        metadata: { warScore: round(warScore, 2), advantage: round(advantage, 2), distance: pair.d },
+        metadata: { warScore, advantage, distance: pair.d },
       });
       return;
     } else if (rel.phase !== "peace" && warScore < 0.2) {
@@ -435,8 +442,8 @@ function decideAction(
       metadata: {
         attackerId: att.tribe.id,
         defenderId: def.tribe.id,
-        warScore: round(warScore, 2),
-        advantage: round(advantage, 2),
+        warScore,
+        advantage,
         scarcity: round(att.scarcity, 2),
         crowding: round(att.crowding, 2),
         conflictMemory: rel.conflictMemory,

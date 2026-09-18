@@ -162,6 +162,8 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
   relationship.hostility = clamp(relationship.hostility + 0.15);
   relationship.trust = clamp(relationship.trust - 0.2);
   relationship.lastInteractionYear = ctx.state.year;
+  // Feeds `recentDefeat` in the stability model and the "last clash" shown in the UI.
+  relationship.lastConflictYear = ctx.state.year;
 
   const winner = outcome.attackerWins ? attacker : defender;
   const loser = outcome.attackerWins ? defender : attacker;
@@ -200,7 +202,8 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
   const commander = winnerTribe.leaderId ? ctx.people.get(winnerTribe.leaderId) : undefined;
   if (commander?.alive) {
     commander.prestige = clamp(commander.prestige + 0.06);
-    if (!commander.title || commander.title === "chief") commander.title = commander.title ?? "commander";
+    // A victory makes a name for someone who had none; a chief already outranks a commander.
+    if (!commander.title) commander.title = "commander";
   }
 
   const place = describePlace(ctx.state, target.x, target.y);
@@ -245,8 +248,8 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
       walls,
       attackerId: attacker.id,
       defenderId: defender.id,
+      warStartYear: relationship.warStartYear,
     },
-    causeEventIds: relationship.warStartYear !== null ? [] : [],
   });
 
   if (kind === "battle" && outcome.attackerWins && target.settlement && outcome.margin >= 1.6) {

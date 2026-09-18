@@ -649,7 +649,10 @@ export async function getPersonDetail(db: Database, worldId: string, personId: s
   ]);
   let partnerId: string | null = null;
   const h = household[0];
-  if (h) partnerId = h.partnerAId === personId ? h.partnerBId : h.partnerAId;
+  // Children keep the household id of their parents: only an actual partner has a partner.
+  if (h && h.dissolvedYear === null && (h.partnerAId === personId || h.partnerBId === personId)) {
+    partnerId = h.partnerAId === personId ? h.partnerBId : h.partnerAId;
+  }
   const partner = partnerId
     ? ((
         await db

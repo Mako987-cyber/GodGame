@@ -241,6 +241,8 @@ export interface WorldDetail {
       harshWinter: boolean;
       winterSeverity: number;
       seasons: SeasonState[];
+      /** The season that shaped the last simulated year (biggest deviation from its norm). */
+      definingSeason: Season;
       hazards: { id: string; kind: string; x: number; y: number; radius: number; severity: number }[];
     };
     simulationVersion: number;

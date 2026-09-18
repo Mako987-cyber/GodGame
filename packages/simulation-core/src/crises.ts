@@ -136,7 +136,7 @@ function startEpidemic(ctx: SimContext, community: Community, settlement: Settle
       population: community.members.length,
     },
   });
-  crisis.eventId = event.id;
+  crisis.eventId = event.id || null;
   state.crises.push(crisis);
   settlement.lastEpidemicYear = state.year;
   applyEpidemic(ctx, community, settlement, crisis);

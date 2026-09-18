@@ -422,8 +422,8 @@ export function progressConstruction(
     .filter((p) => p.alive && p.action === "build")
     .reduce((acc, p) => acc + 0.6 + p.skills.building, 0);
   if (missing) {
-    // Materials are still being gathered: the site is paused, the work does not start.
-    project.status = work > 0 ? "planned" : "paused";
+    // The site exists but the materials have not arrived yet: nothing is built this year.
+    project.status = "paused";
     return;
   }
   project.status = "building";

@@ -53,7 +53,9 @@ export function deriveDeposits(seed: string, cell: Cell): { clay: number; tin: n
 }
 
 export function normalizeCell(seed: string, cell: Cell): Cell {
-  if (cell.clay === undefined || cell.tin === undefined || cell.coal === undefined) {
+  // A legacy row has no value at all for these columns: Postgres returns `null`, an old
+  // snapshot returns `undefined`. Both mean "never computed", so both are derived here.
+  if (cell.clay == null || cell.tin == null || cell.coal == null) {
     const derived = deriveDeposits(seed, cell);
     cell.clay ??= derived.clay;
     cell.tin ??= derived.tin;

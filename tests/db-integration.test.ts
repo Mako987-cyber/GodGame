@@ -1,8 +1,10 @@
 import { createWorld, hashWorld, runSimulation } from "@genesis/simulation-core";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Database } from "@/lib/db";
 import { InMemorySimulationLock, PostgresSimulationLock } from "@/lib/db/lock";
 import { loadWorldState } from "@/lib/db/queries";
+import * as schema from "@/lib/db/schema";
 import {
   createWorldService,
   getEventsService,
@@ -244,5 +246,50 @@ describe("persistenza delle nuove entità", () => {
       expect(point.population).toBeGreaterThanOrEqual(0);
       expect(point.stability).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+describe("regressioni di caricamento", () => {
+  it("un mondo con celle prive dei nuovi giacimenti li ricalcola al caricamento", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Legacy", seed: "legacy-db" }, deps);
+    // Simulates rows written before the extended economy: the columns exist but are NULL.
+    await db
+      .update(schema.worldCells)
+      .set({ clay: null, tin: null, coal: null })
+      .where(eq(schema.worldCells.worldId, world.id));
+
+    const loaded = await loadWorldState(db, world.id);
+    expect(loaded).not.toBeNull();
+    for (const cell of loaded!.state.cells) {
+      expect(Number.isFinite(cell.clay), `clay ${cell.x},${cell.y}`).toBe(true);
+      expect(Number.isFinite(cell.tin)).toBe(true);
+      expect(Number.isFinite(cell.coal)).toBe(true);
+      expect(cell.clay).toBeGreaterThanOrEqual(0);
+    }
+    // At least some deposits are derived: the world is not left barren.
+    expect(loaded!.state.cells.some((c) => c.clay > 0)).toBe(true);
+    // And they are persisted on the next save, identical to what was derived.
+    const derived = loaded!.state.cells.map((c) => c.clay);
+    await simulateWorldService(world.id, 1, deps);
+    const reloaded = await loadWorldState(db, world.id);
+    expect(reloaded!.state.cells.map((c) => c.clay)).toEqual(derived);
+  });
+
+  it("il dettaglio di un figlio non lo dà per accoppiato con un genitore", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Nuclei", seed: "nuclei" }, deps);
+    await simulateWorldService(world.id, 50, deps);
+    const rows = await db
+      .select()
+      .from(schema.people)
+      .where(and(eq(schema.people.worldId, world.id), eq(schema.people.alive, true)))
+      .limit(400);
+    const child = rows.find((p) => p.motherId !== null && p.householdId !== null);
+    if (!child) return;
+    const person = await getPersonService(world.id, child.id, deps);
+    const relatives = [person.family.mother?.id, person.family.father?.id].filter(Boolean);
+    expect(relatives).not.toContain(person.family.partner?.id);
+    if (person.family.partner) expect(person.family.partner.id).not.toBe(person.id);
   });
 });

@@ -79,6 +79,11 @@ export interface EventInput {
  */
 export function emitEvent(ctx: SimContext, input: EventInput): HistoricalEvent {
   const subtype = input.subtype ?? null;
+  if (input.importance < ctx.state.config.observability.minEventImportance) {
+    // Below the configured threshold the event is not part of the chronicle at all: it gets
+    // no id, so nothing can end up referencing an event that was never stored.
+    return suppressedEvent(ctx, input, subtype);
+  }
   const key = `${ctx.state.year}|${input.type}|${subtype ?? ""}|${input.actors.map((a) => a.id).join(",")}`;
   const existing = ctx.emitted.get(key);
   if (existing) {
@@ -107,15 +112,32 @@ export function emitEvent(ctx: SimContext, input: EventInput): HistoricalEvent {
     title: input.title,
     description: `Anno ${formatYear(ctx.state.year)} — ${input.description}`,
     metadata: input.metadata ?? {},
-    causeEventIds: input.causeEventIds ?? [],
+    // A cause that was itself suppressed carries no id: it must not leave a dangling reference.
+    causeEventIds: (input.causeEventIds ?? []).filter((id) => id.length > 0),
   };
-  if (event.importance < ctx.state.config.observability.minEventImportance) {
-    // Still counted (so ids stay deterministic) but not stored.
-    return event;
-  }
   ctx.events.push(event);
   ctx.emitted.set(key, event);
   return event;
+}
+
+/** Placeholder returned for events below the importance threshold: empty id, never stored. */
+function suppressedEvent(ctx: SimContext, input: EventInput, subtype: string | null): HistoricalEvent {
+  return {
+    id: "",
+    seq: 0,
+    tick: ctx.state.tick,
+    year: ctx.state.year,
+    type: input.type,
+    subtype,
+    importance: input.importance,
+    actors: input.actors,
+    x: input.x,
+    y: input.y,
+    title: input.title,
+    description: input.description,
+    metadata: input.metadata ?? {},
+    causeEventIds: [],
+  };
 }
 
 export function formatYear(year: number): string {
