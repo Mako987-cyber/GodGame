@@ -1,0 +1,396 @@
+import { sql } from "drizzle-orm";
+import {
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
+import type {
+  BuildingType,
+  ConstructionProject,
+  Counters,
+  Climate,
+  EventActor,
+  JsonValue,
+  Personality,
+  Skills,
+  WorldSettings,
+} from "@genesis/simulation-core";
+
+/**
+ * Entity ids inside a world (p12, t3, s5...) are deterministic and scoped by world:
+ * every table uses (world_id, id) as primary key so the same seed yields identical ids.
+ */
+const worldRef = () =>
+  uuid("world_id")
+    .notNull()
+    .references(() => worlds.id, { onDelete: "cascade" });
+
+export interface WorldSummary {
+  population: number;
+  tribes: number;
+  settlements: number;
+  civilizations: number;
+  technologies: number;
+  lastEvent: { title: string; year: number; type: string } | null;
+}
+
+export const worlds = pgTable(
+  "worlds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    seed: text("seed").notNull(),
+    width: integer("width").notNull(),
+    height: integer("height").notNull(),
+    currentTick: integer("current_tick").notNull().default(0),
+    currentYear: integer("current_year").notNull(),
+    status: text("status", { enum: ["paused", "running"] })
+      .notNull()
+      .default("paused"),
+    rngState: jsonb("rng_state").$type<[number, number, number, number]>().notNull(),
+    settings: jsonb("settings").$type<WorldSettings>().notNull(),
+    counters: jsonb("counters").$type<Counters>().notNull(),
+    climate: jsonb("climate").$type<Climate>().notNull(),
+    summary: jsonb("summary").$type<WorldSummary>().notNull(),
+    /** Reserved for future authentication. */
+    ownerId: text("owner_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("worlds_updated_idx").on(t.updatedAt), index("worlds_owner_idx").on(t.ownerId)],
+);
+
+export const worldCells = pgTable(
+  "world_cells",
+  {
+    worldId: worldRef(),
+    x: integer("x").notNull(),
+    y: integer("y").notNull(),
+    altitude: doublePrecision("altitude").notNull(),
+    moisture: doublePrecision("moisture").notNull(),
+    temperature: doublePrecision("temperature").notNull(),
+    biome: text("biome").notNull(),
+    fertility: doublePrecision("fertility").notNull(),
+    baseFertility: doublePrecision("base_fertility").notNull(),
+    water: doublePrecision("water").notNull(),
+    wood: doublePrecision("wood").notNull(),
+    maxWood: doublePrecision("max_wood").notNull(),
+    stone: doublePrecision("stone").notNull(),
+    fauna: doublePrecision("fauna").notNull(),
+    maxFauna: doublePrecision("max_fauna").notNull(),
+    copper: doublePrecision("copper").notNull(),
+    iron: doublePrecision("iron").notNull(),
+    habitability: doublePrecision("habitability").notNull(),
+    river: boolean("river").notNull(),
+    riverName: text("river_name"),
+    coastal: boolean("coastal").notNull(),
+    ownerTribeId: text("owner_tribe_id"),
+    settlementId: text("settlement_id"),
+    road: boolean("road").notNull(),
+    fields: integer("fields").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.y, t.x] })],
+);
+
+export const tribes = pgTable(
+  "tribes",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull(),
+    status: text("status", { enum: ["nomadic", "settled", "extinct"] }).notNull(),
+    x: integer("x").notNull(),
+    y: integer("y").notNull(),
+    food: doublePrecision("food").notNull(),
+    wood: doublePrecision("wood").notNull(),
+    stone: doublePrecision("stone").notNull(),
+    copper: doublePrecision("copper").notNull(),
+    techs: jsonb("techs").$type<string[]>().notNull(),
+    techProgress: jsonb("tech_progress").$type<Record<string, number>>().notNull(),
+    yearsAtLocation: integer("years_at_location").notNull(),
+    scarcityYears: integer("scarcity_years").notNull(),
+    foundedYear: integer("founded_year").notNull(),
+    extinctYear: integer("extinct_year"),
+    civilizationId: text("civilization_id"),
+    leaderId: text("leader_id"),
+    parentTribeId: text("parent_tribe_id"),
+    morale: doublePrecision("morale").notNull(),
+    populationMilestone: integer("population_milestone").notNull(),
+    lastFoodProduced: doublePrecision("last_food_produced").notNull(),
+    lastFoodConsumed: doublePrecision("last_food_consumed").notNull(),
+    lastFoodRatio: doublePrecision("last_food_ratio").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.id] }), index("tribes_world_seq_idx").on(t.worldId, t.seq)],
+);
+
+export const households = pgTable(
+  "households",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    tribeId: text("tribe_id").notNull(),
+    partnerAId: text("partner_a_id").notNull(),
+    partnerBId: text("partner_b_id").notNull(),
+    formedYear: integer("formed_year").notNull(),
+    dissolvedYear: integer("dissolved_year"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("households_active_idx")
+      .on(t.worldId, t.seq)
+      .where(sql`${t.dissolvedYear} is null`),
+  ],
+);
+
+export const people = pgTable(
+  "people",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    name: text("name").notNull(),
+    tribeId: text("tribe_id").notNull(),
+    settlementId: text("settlement_id"),
+    householdId: text("household_id"),
+    motherId: text("mother_id"),
+    fatherId: text("father_id"),
+    birthYear: integer("birth_year").notNull(),
+    age: integer("age").notNull(),
+    sex: text("sex", { enum: ["M", "F"] }).notNull(),
+    health: doublePrecision("health").notNull(),
+    hunger: doublePrecision("hunger").notNull(),
+    energy: doublePrecision("energy").notNull(),
+    x: integer("x").notNull(),
+    y: integer("y").notNull(),
+    role: text("role").notNull(),
+    action: text("action").notNull(),
+    skills: jsonb("skills").$type<Skills>().notNull(),
+    personality: jsonb("personality").$type<Personality>().notNull(),
+    alive: boolean("alive").notNull(),
+    deathYear: integer("death_year"),
+    deathCause: text("death_cause"),
+    knowledge: jsonb("knowledge").$type<string[]>().notNull(),
+    lastChildYear: integer("last_child_year"),
+    notable: boolean("notable").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    // Only living people are loaded by the simulation: keep that path on a partial index.
+    index("people_alive_idx")
+      .on(t.worldId, t.seq)
+      .where(sql`${t.alive}`),
+    index("people_tribe_idx").on(t.worldId, t.tribeId),
+  ],
+);
+
+export const settlements = pgTable(
+  "settlements",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    name: text("name").notNull(),
+    tribeId: text("tribe_id").notNull(),
+    civilizationId: text("civilization_id"),
+    x: integer("x").notNull(),
+    y: integer("y").notNull(),
+    level: integer("level").notNull(),
+    status: text("status", { enum: ["active", "abandoned"] }).notNull(),
+    foundedYear: integer("founded_year").notNull(),
+    abandonedYear: integer("abandoned_year"),
+    food: doublePrecision("food").notNull(),
+    wood: doublePrecision("wood").notNull(),
+    stone: doublePrecision("stone").notNull(),
+    copper: doublePrecision("copper").notNull(),
+    buildings: jsonb("buildings").$type<Record<BuildingType, number>>().notNull(),
+    construction: jsonb("construction").$type<ConstructionProject | null>(),
+    defense: doublePrecision("defense").notNull(),
+    territoryRadius: integer("territory_radius").notNull(),
+    famineYears: integer("famine_years").notNull(),
+    roadLinks: jsonb("road_links").$type<string[]>().notNull(),
+    lastProduction: jsonb("last_production")
+      .$type<{ food: number; wood: number; stone: number; copper: number }>()
+      .notNull(),
+    lastFoodRatio: doublePrecision("last_food_ratio").notNull(),
+    population: integer("population").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("settlements_world_coords_idx").on(t.worldId, t.x, t.y),
+  ],
+);
+
+export const civilizations = pgTable(
+  "civilizations",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    name: text("name").notNull(),
+    color: text("color").notNull(),
+    founderTribeId: text("founder_tribe_id").notNull(),
+    capitalSettlementId: text("capital_settlement_id"),
+    foundedYear: integer("founded_year").notNull(),
+    status: text("status", { enum: ["active", "collapsed"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.id] })],
+);
+
+/** Global catalog, seeded from the simulation core definitions. */
+export const technologies = pgTable("technologies", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  prerequisites: jsonb("prerequisites").$type<string[]>().notNull(),
+  cost: integer("cost").notNull(),
+  minPopulation: integer("min_population").notNull(),
+  requiresSettlement: boolean("requires_settlement").notNull(),
+  resourceRequirement: text("resource_requirement").notNull(),
+  geographyRequirement: text("geography_requirement"),
+  effects: jsonb("effects").$type<Record<string, number>>().notNull(),
+  effectSummary: text("effect_summary").notNull(),
+});
+
+export const worldTechnologies = pgTable(
+  "world_technologies",
+  {
+    worldId: worldRef(),
+    tribeId: text("tribe_id").notNull(),
+    techId: text("tech_id")
+      .notNull()
+      .references(() => technologies.id),
+    discoveredYear: integer("discovered_year").notNull(),
+    discoveredTick: integer("discovered_tick").notNull(),
+    method: text("method").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.tribeId, t.techId] })],
+);
+
+export const relationships = pgTable(
+  "relationships",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    aId: text("a_id").notNull(),
+    bId: text("b_id").notNull(),
+    trust: doublePrecision("trust").notNull(),
+    hostility: doublePrecision("hostility").notNull(),
+    tradeVolume: doublePrecision("trade_volume").notNull(),
+    conflictMemory: doublePrecision("conflict_memory").notNull(),
+    atWar: boolean("at_war").notNull(),
+    warStartYear: integer("war_start_year"),
+    allied: boolean("allied").notNull(),
+    distance: integer("distance").notNull(),
+    lastInteractionYear: integer("last_interaction_year").notNull(),
+    battles: integer("battles").notNull(),
+    truceUntilYear: integer("truce_until_year"),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.id] })],
+);
+
+export const historicalEvents = pgTable(
+  "historical_events",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    tick: integer("tick").notNull(),
+    year: integer("year").notNull(),
+    type: text("type").notNull(),
+    importance: integer("importance").notNull(),
+    actors: jsonb("actors").$type<EventActor[]>().notNull(),
+    x: integer("x"),
+    y: integer("y"),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, JsonValue>>().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    // Timeline: newest first, optionally filtered by type or minimum importance.
+    index("events_world_seq_idx").on(t.worldId, t.seq),
+    index("events_world_tick_idx").on(t.worldId, t.tick),
+    index("events_world_year_idx").on(t.worldId, t.year),
+    index("events_world_importance_idx").on(t.worldId, t.importance, t.seq),
+    index("events_world_type_idx").on(t.worldId, t.type, t.seq),
+  ],
+);
+
+export const worldStats = pgTable(
+  "world_stats",
+  {
+    worldId: worldRef(),
+    tick: integer("tick").notNull(),
+    year: integer("year").notNull(),
+    population: integer("population").notNull(),
+    tribes: integer("tribes").notNull(),
+    settlements: integer("settlements").notNull(),
+    civilizations: integer("civilizations").notNull(),
+    foodProduced: doublePrecision("food_produced").notNull(),
+    foodConsumed: doublePrecision("food_consumed").notNull(),
+    foodStored: doublePrecision("food_stored").notNull(),
+    technologies: integer("technologies").notNull(),
+    wars: integer("wars").notNull(),
+    battles: integer("battles").notNull(),
+    births: integer("births").notNull(),
+    deaths: integer("deaths").notNull(),
+    starvationDeaths: integer("starvation_deaths").notNull(),
+    conflictDeaths: integer("conflict_deaths").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.tick] }), index("world_stats_year_idx").on(t.worldId, t.year)],
+);
+
+export const worldSnapshots = pgTable(
+  "world_snapshots",
+  {
+    worldId: worldRef(),
+    tick: integer("tick").notNull(),
+    year: integer("year").notNull(),
+    stateVersion: integer("state_version").notNull(),
+    /** Full serialized WorldState (living entities only): base for replays and rollbacks. */
+    state: jsonb("state").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.tick] })],
+);
+
+export const simulationLocks = pgTable("simulation_locks", {
+  worldId: uuid("world_id")
+    .primaryKey()
+    .references(() => worlds.id, { onDelete: "cascade" }),
+  token: uuid("token").notNull(),
+  lockedAt: timestamp("locked_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+
+export const simulationRuns = pgTable(
+  "simulation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    worldId: worldRef(),
+    fromTick: integer("from_tick").notNull(),
+    toTick: integer("to_tick").notNull(),
+    requestedTicks: integer("requested_ticks").notNull(),
+    ticksRun: integer("ticks_run").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    status: text("status", { enum: ["completed", "partial", "failed"] }).notNull(),
+    eventsCount: integer("events_count").notNull(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("simulation_runs_world_idx").on(t.worldId, t.createdAt)],
+);
+
+export type WorldRow = typeof worlds.$inferSelect;
+export type EventRow = typeof historicalEvents.$inferSelect;
+export type StatsRow = typeof worldStats.$inferSelect;
