@@ -54,18 +54,26 @@ npm run sim:run -- genesis 1000 100
 
 ## Variabili d'ambiente
 
-| Variabile                                  | Obbligatoria      | Descrizione                                                                                                               |
-| ------------------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                             | in produzione     | Connessione runtime. Su Supabase usa il **pooler in transaction mode** (porta 6543). Fallback: `POSTGRES_URL`.            |
-| `DIRECT_URL`                               | per le migrazioni | Connessione diretta/session (porta 5432) usata da `db:migrate`. Fallback: `POSTGRES_URL_NON_POOLING`, poi `DATABASE_URL`. |
-| `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING` | —                 | Create automaticamente dall'integrazione Supabase del Vercel Marketplace: vengono lette senza doverle rinominare.         |
-| `NEXT_PUBLIC_APP_URL`                      | no                | URL pubblico dell'app.                                                                                                    |
-| `SIMULATION_MAX_TICKS_PER_REQUEST`         | no (100)          | Limite di tick per chiamata a `/simulate`.                                                                                |
-| `SIMULATION_TIME_BUDGET_MS`                | no (20000)        | Budget di calcolo per richiesta: oltre questa soglia il batch si ferma e salva i tick completati (`partial: true`).       |
-| `SIMULATION_LOCK_TTL_MS`                   | no (60000)        | Durata del lock per mondo (protezione da lock orfani).                                                                    |
-| `DATABASE_POOL_MAX`                        | no (3)            | Connessioni massime per istanza serverless.                                                                               |
-| `PGLITE_DIR`                               | no                | Cartella di PGlite in locale (default `.data/pglite`).                                                                    |
-| `CRON_SECRET`                              | no                | Abilita il cron opzionale `/api/cron/advance`.                                                                            |
+| Variabile                                                  | Obbligatoria      | Descrizione                                                                                                                                |
+| ---------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                                             | in produzione     | Connessione runtime. Su Supabase usa il **pooler in transaction mode** (porta 6543). Fallback: `POSTGRES_URL`.                             |
+| `DIRECT_URL`                                               | per le migrazioni | Connessione diretta/session (porta 5432) usata da `db:migrate`. Fallback: `POSTGRES_URL_NON_POOLING`, poi `DATABASE_URL`.                  |
+| `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`                 | —                 | Create automaticamente dall'integrazione Supabase del Vercel Marketplace: vengono lette senza doverle rinominare.                          |
+| `GODGAME_POSTGRES_URL`, `GODGAME_POSTGRES_URL_NON_POOLING` | —                 | Variabili del database **god_game_db** (Supabase via Vercel), create con il prefisso `GODGAME_`. Lette come fallback runtime e migrazioni. |
+| `DATABASE_ENV_PREFIX`                                      | no (`GODGAME_`)   | Prefisso delle variabili dell'integrazione, se cambia.                                                                                     |
+| `NEXT_PUBLIC_APP_URL`                                      | no                | URL pubblico dell'app.                                                                                                                     |
+| `SIMULATION_MAX_TICKS_PER_REQUEST`                         | no (100)          | Limite di tick per chiamata a `/simulate`.                                                                                                 |
+| `SIMULATION_TIME_BUDGET_MS`                                | no (20000)        | Budget di calcolo per richiesta: oltre questa soglia il batch si ferma e salva i tick completati (`partial: true`).                        |
+| `SIMULATION_LOCK_TTL_MS`                                   | no (60000)        | Durata del lock per mondo (protezione da lock orfani).                                                                                     |
+| `DATABASE_POOL_MAX`                                        | no (3)            | Connessioni massime per istanza serverless.                                                                                                |
+| `PGLITE_DIR`                                               | no                | Cartella di PGlite in locale (default `.data/pglite`).                                                                                     |
+| `CRON_SECRET`                                              | no                | Abilita il cron opzionale `/api/cron/advance`.                                                                                             |
+
+Le variabili di `god_game_db` sono **sensibili** e definite solo per Preview e Production: Vercel le inietta
+nei deploy (build e runtime) ma `vercel env pull` non può scaricarle. Per usare Supabase anche in locale copia
+le stringhe di connessione dal dashboard Supabase (_Connect_) in `.env.local` come `DATABASE_URL` (pooler,
+porta 6543) e `DIRECT_URL` (porta 5432), oppure resta su PGlite. I segnaposto `[SENSITIVE]` scritti da
+`vercel env pull` vengono ignorati.
 
 I parametri non standard presenti negli URL Supabase (per esempio `supa=base-pooler.x`) vengono rimossi
 automaticamente (`lib/db/config.ts`), perché Postgres li rifiuterebbe come opzioni di avvio.
