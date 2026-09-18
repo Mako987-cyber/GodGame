@@ -2,8 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "npm run build:vercel",
+  "regions": ["fra1"],
   "functions": {
-    "app/api/worlds/[worldId]/simulate/route.ts": { "maxDuration": 60 },
-    "app/api/cron/advance/route.ts": { "maxDuration": 60 }
+    "app/api/worlds/[worldId]/simulate/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/cron/advance/route.ts": {
+      "maxDuration": 60
+    }
   }
 }
