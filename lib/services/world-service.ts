@@ -108,8 +108,10 @@ export async function createWorldService(input: CreateWorldInput, deps?: Service
     worldId: row.id,
     seed,
     size: `${state.width}x${state.height}`,
+    cells: state.cells.length,
     tribes: state.tribes.length,
     people: state.people.length,
+    simulationVersion: state.simulationVersion,
     durationMs: Date.now() - started,
   });
   return toListItem(row);
@@ -633,6 +635,8 @@ export async function simulateWorldService(
         | "tradeVolume",
     ) => Math.round(result.stats.reduce((acc, st) => acc + st[k], 0) * 10) / 10;
 
+    // Performance budget: every phase of the batch is measured, so a slow world is
+    // diagnosable from the logs alone (load, compute, save).
     logger.info("simulate.batch", {
       worldId,
       fromTick,
@@ -641,10 +645,14 @@ export async function simulateWorldService(
       ticksRun: result.ticksRun,
       partial: result.partial,
       people: loaded.state.people.length,
+      settlements: loaded.state.settlements.filter((s) => s.status === "active").length,
+      tribes: loaded.state.tribes.filter((t) => t.status !== "extinct").length,
       events: result.events.length,
+      civStats: result.civStats.length,
       loadMs: loadedAt - started,
       computeMs: computedAt - loadedAt,
       saveMs: Date.now() - computedAt,
+      msPerTick: result.ticksRun > 0 ? Math.round(((computedAt - loadedAt) / result.ticksRun) * 10) / 10 : 0,
       durationMs,
     });
     await recordSimulationRun(db, {

@@ -1,11 +1,23 @@
 import type {
   ApiErrorBody,
   EventsPage,
+  PersonDTO,
   SimulateResponse,
-  StatsPoint,
+  StatsResponse,
   WorldDetail,
   WorldListItem,
 } from "@/lib/dto";
+
+export interface EventFilters {
+  page: number;
+  pageSize: number;
+  type?: string;
+  minImportance?: number;
+  search?: string;
+  fromYear?: number;
+  toYear?: number;
+  actorId?: string;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -51,13 +63,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ticks }),
     }),
-  events: (id: string, params: { page: number; pageSize: number; type?: string; minImportance?: number }) => {
+  events: (id: string, params: EventFilters) => {
     const q = new URLSearchParams({ page: String(params.page), pageSize: String(params.pageSize) });
     if (params.type) q.set("type", params.type);
     if (params.minImportance) q.set("minImportance", String(params.minImportance));
+    if (params.search) q.set("search", params.search);
+    if (params.fromYear !== undefined) q.set("fromYear", String(params.fromYear));
+    if (params.toYear !== undefined) q.set("toYear", String(params.toYear));
+    if (params.actorId) q.set("actorId", params.actorId);
     return request<EventsPage>(`/api/worlds/${id}/events?${q}`);
   },
-  stats: (id: string) => request<StatsPoint[]>(`/api/worlds/${id}/stats?maxPoints=400`),
+  stats: (id: string, options: { civilizations?: boolean } = {}) =>
+    request<StatsResponse>(
+      `/api/worlds/${id}/stats?maxPoints=400${options.civilizations ? "&civilizations=true" : ""}`,
+    ),
+  person: (id: string, personId: string) => request<PersonDTO>(`/api/worlds/${id}/people/${personId}`),
 };
 
 export const queryKeys = {
@@ -65,4 +85,5 @@ export const queryKeys = {
   world: (id: string) => ["world", id] as const,
   events: (id: string) => ["events", id] as const,
   stats: (id: string) => ["stats", id] as const,
+  person: (id: string, personId: string) => ["person", id, personId] as const,
 };

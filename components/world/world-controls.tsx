@@ -82,7 +82,10 @@ function LastRun({ run }: { run: SimulateResponse }) {
       {run.ticksRun} {run.ticksRun === 1 ? "anno simulato" : "anni simulati"} fino al {fmtYear(run.year)} in{" "}
       {fmtInt(run.durationMs)} ms: {fmtInt(run.metrics.births)} nascite, {fmtInt(run.metrics.deaths)} morti (
       {delta >= 0 ? "+" : ""}
-      {fmtInt(delta)}), {fmtInt(run.eventsTotal)} eventi
+      {fmtInt(delta)})
+      {run.metrics.epidemicDeaths > 0 && `, ${fmtInt(run.metrics.epidemicDeaths)} per epidemia`}
+      {run.metrics.migrations > 0 && `, ${fmtInt(run.metrics.migrations)} in migrazione`},{" "}
+      {fmtInt(run.eventsTotal)} eventi
       {run.partial && (
         <span className="text-ochre">
           . Batch interrotto per limite di tempo: i tick completati sono salvati.

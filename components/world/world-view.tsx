@@ -130,7 +130,14 @@ export function WorldView({ initial }: { initial: WorldDetail }) {
           />
         }
       >
-        {lower === "timeline" ? <WorldTimeline worldId={worldId} /> : <WorldStatistics worldId={worldId} />}
+        {lower === "timeline" ? (
+          <WorldTimeline detail={detail} />
+        ) : (
+          <WorldStatistics
+            worldId={worldId}
+            civilizations={detail.civilizations.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
+          />
+        )}
       </Panel>
     </main>
   );

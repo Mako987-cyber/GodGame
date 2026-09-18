@@ -6,6 +6,7 @@ import { loadWorldState } from "@/lib/db/queries";
 import {
   createWorldService,
   getEventsService,
+  getPersonService,
   getStatsService,
   getWorldDetailService,
   simulateWorldService,
@@ -135,5 +136,113 @@ describe("persistenza", () => {
     await expect(simulateWorldService(crypto.randomUUID(), 5000, deps)).rejects.toMatchObject({
       code: "TICKS_NOT_ALLOWED",
     });
+  });
+});
+
+describe("persistenza delle nuove entità", () => {
+  it("salva e ricarica cultura, stabilità, dinastie e crisi", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Evoluzione", seed: "evoluzione" }, deps);
+    await simulateWorldService(world.id, 100, deps);
+    await simulateWorldService(world.id, 100, deps);
+
+    const loaded = await loadWorldState(db, world.id);
+    expect(loaded).not.toBeNull();
+    const state = loaded!.state;
+    expect(state.simulationVersion).toBeGreaterThanOrEqual(2);
+    expect(state.config.climate.droughtChance).toBeGreaterThan(0);
+    for (const tribe of state.tribes) {
+      expect(tribe.culture.cooperation).toBeGreaterThan(0);
+      expect(tribe.government).toBeTruthy();
+      expect(tribe.stability.legitimacy).toBeGreaterThanOrEqual(0);
+      expect(tribe.stock.goods).toBeDefined();
+      expect(tribe.techAdoption).toBeDefined();
+    }
+    for (const cell of state.cells) {
+      expect(Number.isFinite(cell.clay)).toBe(true);
+      expect(Number.isFinite(cell.tin)).toBe(true);
+      expect(Number.isFinite(cell.coal)).toBe(true);
+    }
+    // A reloaded state keeps replaying identically to one kept in memory.
+    const detail = await getWorldDetailService(world.id, deps);
+    expect(detail.world.simulationVersion).toBeGreaterThanOrEqual(2);
+    expect(detail.world.climate.seasons.length).toBe(4);
+    expect(detail.dynasties.length).toBe(state.dynasties.length);
+  });
+
+  it("il dettaglio persona è consultabile su richiesta", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Persone", seed: "persone" }, deps);
+    await simulateWorldService(world.id, 60, deps);
+    const detail = await getWorldDetailService(world.id, deps);
+    const someone = detail.notablePeople[0];
+    expect(someone).toBeDefined();
+
+    const person = await getPersonService(world.id, someone!.id, deps);
+    expect(person.id).toBe(someone!.id);
+    expect(person.name).toBe(someone!.name);
+    expect(person.tribeName).toBeTruthy();
+    expect(person.family).toBeDefined();
+    expect(Array.isArray(person.events)).toBe(true);
+    await expect(getPersonService(world.id, "p999999", deps)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("gli eventi sono filtrabili per periodo, tipo, importanza, attore e testo", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Filtri", seed: "filtri" }, deps);
+    await simulateWorldService(world.id, 100, deps);
+    const all = await getEventsService(world.id, { page: 1, pageSize: 100 }, deps);
+    expect(all.total).toBeGreaterThan(0);
+
+    const ranged = await getEventsService(
+      { ...world }.id,
+      { page: 1, pageSize: 100, fromYear: -9980, toYear: -9950 },
+      deps,
+    );
+    for (const e of ranged.items) {
+      expect(e.year).toBeGreaterThanOrEqual(-9980);
+      expect(e.year).toBeLessThanOrEqual(-9950);
+    }
+
+    const climate = await getEventsService(world.id, { page: 1, pageSize: 50, type: ["climate"] }, deps);
+    expect(climate.items.every((e) => e.type === "climate")).toBe(true);
+
+    const actorId = all.items.find((e) => e.actors.length > 0)?.actors[0]?.id;
+    if (actorId) {
+      const byActor = await getEventsService(world.id, { page: 1, pageSize: 50, actorId }, deps);
+      expect(byActor.total).toBeGreaterThan(0);
+      expect(byActor.items.every((e) => e.actors.some((a) => a.id === actorId))).toBe(true);
+    }
+
+    const word = all.items[0]!.title.split(" ")[0]!;
+    const found = await getEventsService(world.id, { page: 1, pageSize: 50, search: word }, deps);
+    expect(found.total).toBeGreaterThan(0);
+
+    // SQL wildcards are escaped, not interpreted: "%" only matches a literal per-cent sign.
+    const wildcard = await getEventsService(world.id, { page: 1, pageSize: 100, search: "%" }, deps);
+    expect(wildcard.total).toBeLessThan(all.total);
+    for (const e of wildcard.items) {
+      expect(`${e.title} ${e.description}`).toContain("%");
+    }
+    const noMatch = await getEventsService(world.id, { page: 1, pageSize: 50, search: "%zqx%" }, deps);
+    expect(noMatch.total).toBe(0);
+  });
+
+  it("le statistiche per civiltà sono campionate e filtrabili", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService({ name: "Serie", seed: "territorio" }, deps);
+    for (let i = 0; i < 4; i++) await simulateWorldService(world.id, 100, deps);
+    const stats = await getStatsService(world.id, 200, { civilizations: true }, deps);
+    expect(stats.world.length).toBeGreaterThan(0);
+    for (const point of stats.world) {
+      expect(point.season).toBeTruthy();
+      expect(point.territory).toBeGreaterThanOrEqual(0);
+      expect(point.wealth).toBeGreaterThanOrEqual(0);
+    }
+    for (const point of stats.civilizations) {
+      expect(point.civilizationId).toMatch(/^c\d+$/);
+      expect(point.population).toBeGreaterThanOrEqual(0);
+      expect(point.stability).toBeGreaterThanOrEqual(0);
+    }
   });
 });

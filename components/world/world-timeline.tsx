@@ -1,42 +1,94 @@
 "use client";
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { MapPin } from "lucide-react";
-import { useState } from "react";
+import { HelpCircle, MapPin, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { WorldDetail } from "@/lib/dto";
 import { api, queryKeys } from "@/lib/client/api";
 import { EVENT_LABELS, eventTone, fmtInt, fmtYear } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
+import { EventExplanation } from "./event-explanation";
 
 const PAGE_SIZE = 20;
 
-export function WorldTimeline({ worldId }: { worldId: string }) {
-  const [type, setType] = useState("");
-  const [minImportance, setMinImportance] = useState(2);
+interface Filters {
+  type: string;
+  minImportance: number;
+  search: string;
+  fromYear: string;
+  toYear: string;
+  actorId: string;
+}
+
+const EMPTY: Filters = { type: "", minImportance: 2, search: "", fromYear: "", toYear: "", actorId: "" };
+
+export function WorldTimeline({ detail }: { detail: WorldDetail }) {
+  const worldId = detail.world.id;
+  const [filters, setFilters] = useState<Filters>(EMPTY);
   const [page, setPage] = useState(1);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const focusOn = useWorldUi((s) => s.focusOn);
+  const explaining = useWorldUi((s) => s.explaining);
+  const explain = useWorldUi((s) => s.explain);
+
+  // The search box waits for the user to stop typing before hitting the API.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(filters.search.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [filters.search]);
+
+  const params = {
+    page,
+    pageSize: PAGE_SIZE,
+    type: filters.type || undefined,
+    minImportance: filters.minImportance,
+    search: debouncedSearch || undefined,
+    fromYear: filters.fromYear ? Number(filters.fromYear) : undefined,
+    toYear: filters.toYear ? Number(filters.toYear) : undefined,
+    actorId: filters.actorId || undefined,
+  };
 
   const query = useQuery({
-    queryKey: [...queryKeys.events(worldId), { type, minImportance, page }],
-    queryFn: () => api.events(worldId, { page, pageSize: PAGE_SIZE, type: type || undefined, minImportance }),
+    queryKey: [...queryKeys.events(worldId), params],
+    queryFn: () => api.events(worldId, params),
     placeholderData: keepPreviousData,
   });
 
+  const update = (patch: Partial<Filters>) => {
+    setFilters((f) => ({ ...f, ...patch }));
+    setPage(1);
+  };
+
+  const actors = [
+    ...detail.tribes
+      .filter((t) => t.status !== "extinct")
+      .map((t) => ({ id: t.id, name: `Tribù ${t.name}` })),
+    ...detail.civilizations.map((c) => ({ id: c.id, name: c.name })),
+    ...detail.settlements
+      .filter((s) => s.status === "active")
+      .map((s) => ({ id: s.id, name: `Insediamento ${s.name}` })),
+  ];
+  const active =
+    filters.type || filters.search || filters.fromYear || filters.toYear || filters.actorId
+      ? true
+      : filters.minImportance !== EMPTY.minImportance;
+
   return (
     <div className="flex flex-col gap-3 p-4">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-end gap-2">
         <label className="text-muted flex items-center gap-2 text-sm">
           Tipo
           <Select
             className="h-9 w-auto"
-            value={type}
-            onChange={(e) => {
-              setType(e.target.value);
-              setPage(1);
-            }}
+            value={filters.type}
+            onChange={(e) => update({ type: e.target.value })}
           >
             <option value="">Tutti</option>
             {Object.entries(EVENT_LABELS).map(([value, label]) => (
@@ -50,19 +102,71 @@ export function WorldTimeline({ worldId }: { worldId: string }) {
           Importanza
           <Select
             className="h-9 w-auto"
-            value={minImportance}
-            onChange={(e) => {
-              setMinImportance(Number(e.target.value));
-              setPage(1);
-            }}
+            value={filters.minImportance}
+            onChange={(e) => update({ minImportance: Number(e.target.value) })}
           >
             <option value={1}>Tutti gli eventi</option>
-            <option value={2}>Almeno 2</option>
-            <option value={3}>Almeno 3</option>
-            <option value={4}>Almeno 4</option>
-            <option value={5}>Solo epocali</option>
+            <option value={2}>Almeno locali</option>
+            <option value={3}>Almeno importanti</option>
+            <option value={4}>Almeno regionali</option>
+            <option value={5}>Solo svolte storiche</option>
           </Select>
         </label>
+        <label className="text-muted flex items-center gap-2 text-sm">
+          Protagonista
+          <Select
+            className="h-9 w-auto max-w-48"
+            value={filters.actorId}
+            onChange={(e) => update({ actorId: e.target.value })}
+          >
+            <option value="">Tutti</option>
+            {actors.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </Select>
+        </label>
+        <label className="text-muted flex items-center gap-2 text-sm">
+          Dal
+          <Input
+            className="h-9 w-24"
+            type="number"
+            inputMode="numeric"
+            value={filters.fromYear}
+            onChange={(e) => update({ fromYear: e.target.value })}
+            placeholder={String(detail.world.settings.startYear)}
+            aria-label="Anno iniziale"
+          />
+        </label>
+        <label className="text-muted flex items-center gap-2 text-sm">
+          al
+          <Input
+            className="h-9 w-24"
+            type="number"
+            inputMode="numeric"
+            value={filters.toYear}
+            onChange={(e) => update({ toYear: e.target.value })}
+            placeholder={String(detail.world.currentYear)}
+            aria-label="Anno finale"
+          />
+        </label>
+        <label className="text-muted flex items-center gap-2 text-sm">
+          Cerca
+          <Input
+            className="h-9 w-44"
+            type="search"
+            value={filters.search}
+            onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+            placeholder="parola nel testo"
+            aria-label="Cerca nel testo degli eventi"
+          />
+        </label>
+        {active && (
+          <Button size="sm" variant="ghost" onClick={() => setFilters(EMPTY)}>
+            <X /> Azzera filtri
+          </Button>
+        )}
       </div>
 
       {query.isPending ? (
@@ -80,7 +184,7 @@ export function WorldTimeline({ worldId }: { worldId: string }) {
         </div>
       ) : query.data.items.length === 0 ? (
         <p className="text-muted text-sm">
-          {query.data.total === 0 && !type
+          {query.data.total === 0 && !active
             ? "La storia è ancora da scrivere: avanza il tempo per generare eventi."
             : "Nessun evento corrisponde ai filtri scelti."}
         </p>
@@ -104,15 +208,34 @@ export function WorldTimeline({ worldId }: { worldId: string }) {
                 <p className="text-muted mt-1 max-w-[72ch] font-serif text-[0.95rem] leading-relaxed">
                   {e.description.replace(/^Anno [^—]+— /, "")}
                 </p>
-                {e.x !== null && e.y !== null && (
+                <div className="flex flex-wrap items-center gap-1">
+                  {e.x !== null && e.y !== null && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="mt-1 -ml-3 h-7"
+                      onClick={() => focusOn(e.x as number, e.y as number)}
+                    >
+                      <MapPin /> Mostra sulla mappa
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="mt-1 -ml-3 h-7"
-                    onClick={() => focusOn(e.x as number, e.y as number)}
+                    className="mt-1 h-7"
+                    aria-expanded={explaining === e.id}
+                    onClick={() => explain(explaining === e.id ? null : e.id)}
                   >
-                    <MapPin /> Mostra sulla mappa
+                    <HelpCircle /> Perché è successo?
                   </Button>
+                </div>
+                {explaining === e.id && (
+                  <EventExplanation
+                    event={e}
+                    detail={detail}
+                    causes={query.data.items.filter((c) => e.causeEventIds.includes(c.id))}
+                    onSelectCause={(id) => explain(id)}
+                  />
                 )}
               </div>
             </li>

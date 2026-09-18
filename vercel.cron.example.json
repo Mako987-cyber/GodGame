@@ -1,0 +1,26 @@
+{
+  "//": [
+    "Esempio OPZIONALE di configurazione con Vercel Cron.",
+    "Per abilitarlo: copia il blocco \"crons\" dentro vercel.json, imposta la variabile",
+    "d'ambiente CRON_SECRET su Vercel e fai un nuovo deploy.",
+    "Gli schedule sono sempre interpretati in UTC.",
+    "Senza CRON_SECRET la route /api/cron/advance risponde 401 e i mondi avanzano",
+    "solo dai comandi espliciti dell'interfaccia: il cron non è mai obbligatorio.",
+    "Ogni esecuzione avanza al massimo CRON_WORLDS_PER_RUN mondi in stato \"running\",",
+    "di CRON_TICKS_PER_WORLD anni ciascuno, con lock, timeout e log strutturati."
+  ],
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build:vercel",
+  "regions": ["fra1"],
+  "functions": {
+    "app/api/worlds/[worldId]/simulate/route.ts": { "maxDuration": 60 },
+    "app/api/cron/advance/route.ts": { "maxDuration": 60 }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/advance",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

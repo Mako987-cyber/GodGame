@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Stockpile } from "@genesis/simulation-core";
-import { fmtDec, fmtInt } from "@/lib/client/format";
+import { fmtDec, RESOURCE_LABELS } from "@/lib/client/format";
 
 export function Facts({ items }: { items: [string, ReactNode][] }) {
   return (
@@ -45,16 +45,42 @@ export function Meter({
   );
 }
 
+/** Shows the four core resources plus anything the group actually holds. */
 export function StockList({ stock }: { stock: Stockpile }) {
+  const goods = Object.entries(stock.goods ?? {})
+    .filter(([, amount]) => (amount ?? 0) > 0.05)
+    .sort(([a], [b]) => a.localeCompare(b));
+  const items: [string, ReactNode][] = [
+    [RESOURCE_LABELS.food ?? "Cibo", fmtDec(stock.food)],
+    [RESOURCE_LABELS.wood ?? "Legname", fmtDec(stock.wood)],
+    [RESOURCE_LABELS.stone ?? "Pietra", fmtDec(stock.stone)],
+    [RESOURCE_LABELS.copper ?? "Rame", fmtDec(stock.copper)],
+    ...goods.map(([kind, amount]): [string, ReactNode] => [
+      RESOURCE_LABELS[kind] ?? kind,
+      fmtDec(amount ?? 0),
+    ]),
+  ];
+  return <Facts items={items} />;
+}
+
+/** Culture traits are shown as a compact 0-100 list, never as a single "score". */
+export function TraitList<T extends object>({
+  traits,
+  labels,
+}: {
+  traits: T;
+  labels: Record<string, string>;
+}) {
+  const entries = Object.entries(traits).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number",
+  );
   return (
-    <Facts
-      items={[
-        ["Cibo", fmtDec(stock.food)],
-        ["Legname", fmtDec(stock.wood)],
-        ["Pietra", fmtDec(stock.stone)],
-        ["Rame", fmtInt(stock.copper)],
-      ]}
-    />
+    <div className="grid gap-1.5">
+      {entries.map(([key, value]) => (
+        // Culture traits are stored 0-100, stability indicators 0-1: both render as a meter.
+        <Meter key={key} label={labels[key] ?? key} value={value > 1 ? value / 100 : value} />
+      ))}
+    </div>
   );
 }
 
