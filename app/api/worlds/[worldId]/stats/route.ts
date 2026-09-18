@@ -15,8 +15,8 @@ export const runtime = "nodejs";
 export async function GET(request: Request, context: WorldRouteContext) {
   try {
     const worldId = parseWorldId((await context.params).worldId);
-    const { maxPoints } = parse(statsQuerySchema, searchParams(request));
-    return ok(await getStatsService(worldId, maxPoints));
+    const { maxPoints, civilizations } = parse(statsQuerySchema, searchParams(request));
+    return ok(await getStatsService(worldId, maxPoints, { civilizations }));
   } catch (error) {
     return errorResponse(error);
   }

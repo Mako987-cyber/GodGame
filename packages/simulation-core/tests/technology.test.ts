@@ -19,6 +19,8 @@ function input(techs: string[], overrides: Partial<TechConditionInput> = {}): Te
     area: fertile.map((c) => ({ ...c, wood: 100, stone: 100, copper: 50, water: 1, maxFauna: 30 })),
     maxHostility: 0.6,
     conflictMemory: 0.5,
+    tradePartners: 1,
+    culture: tribe.culture,
     ...overrides,
   };
 }

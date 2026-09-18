@@ -1,5 +1,8 @@
 import type { Rng } from "./prng";
-import type { Cell, HistoricalEvent, Person, Settlement, Stockpile, Tribe, WorldState } from "./types";
+import { emptyStock, type Stockpile } from "./stock";
+import type { Cell, HistoricalEvent, Person, Settlement, Tribe, WorldState } from "./types";
+
+export { emptyStock };
 
 /** A group that produces and consumes together: a nomadic band or a settlement. */
 export interface Community {
@@ -24,9 +27,13 @@ export interface TickCounters {
   deaths: number;
   starvationDeaths: number;
   conflictDeaths: number;
+  epidemicDeaths: number;
   battles: number;
   foodProduced: number;
   foodConsumed: number;
+  goodsProduced: number;
+  tradeVolume: number;
+  migrations: number;
 }
 
 export interface SimContext {
@@ -38,6 +45,8 @@ export interface SimContext {
   settlements: Map<string, Settlement>;
   people: Map<string, Person>;
   communities: Community[];
+  /** Deduplication index of the events emitted during the current tick. */
+  emitted: Map<string, HistoricalEvent>;
 }
 
 export function emptyCounters(): TickCounters {
@@ -46,9 +55,13 @@ export function emptyCounters(): TickCounters {
     deaths: 0,
     starvationDeaths: 0,
     conflictDeaths: 0,
+    epidemicDeaths: 0,
     battles: 0,
     foodProduced: 0,
     foodConsumed: 0,
+    goodsProduced: 0,
+    tradeVolume: 0,
+    migrations: 0,
   };
 }
 
@@ -73,8 +86,4 @@ export function buildIndexes(ctx: Pick<SimContext, "state" | "tribes" | "settlem
 
 export function livingMembers(state: WorldState, tribeId: string): Person[] {
   return state.people.filter((p) => p.alive && p.tribeId === tribeId);
-}
-
-export function emptyStock(): Stockpile {
-  return { food: 0, wood: 0, stone: 0, copper: 0 };
 }

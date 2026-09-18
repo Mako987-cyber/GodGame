@@ -11,7 +11,9 @@ export default defineConfig({
     },
   },
   test: {
+    // The stress suite runs separately: `npm run test:simulation`.
     include: ["packages/**/tests/**/*.test.ts", "tests/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "packages/**/tests/stress/**"],
     environment: "node",
     testTimeout: 60_000,
   },

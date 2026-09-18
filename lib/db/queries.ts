@@ -1,8 +1,12 @@
 import {
   collectStats,
   createContext,
+  DEFAULT_SIMULATION_CONFIG,
+  migrateState,
   normalizeState,
+  parseSimulationConfig,
   serializeWorld,
+  SIMULATION_VERSION,
   STATE_VERSION,
   TECHNOLOGIES,
   type HistoricalEvent,
@@ -20,6 +24,7 @@ import {
   inArray,
   isNull,
   lt,
+  lte,
   ne,
   sql,
   type SQL,
@@ -30,7 +35,6 @@ import * as m from "./mappers";
 import * as s from "./schema";
 
 const CHUNK_ROWS = 400;
-const SNAPSHOT_INTERVAL = 100;
 const SNAPSHOTS_KEPT = 3;
 
 function chunk<T>(rows: T[], size = CHUNK_ROWS): T[][] {
@@ -125,6 +129,9 @@ export async function insertWorld(
         counters: state.counters,
         climate: state.climate,
         summary: computeSummary(state, null),
+        simulationVersion: state.simulationVersion,
+        config: state.config,
+        crises: state.crises,
       })
       .returning();
     await bulkInsert(
@@ -194,50 +201,63 @@ export interface LoadedWorld {
 export async function loadWorldState(db: Database, worldId: string): Promise<LoadedWorld | null> {
   const row = await getWorldRow(db, worldId);
   if (!row) return null;
-  const [cells, people, tribes, settlements, civilizations, households, relationships] = await Promise.all([
-    db
-      .select()
-      .from(s.worldCells)
-      .where(eq(s.worldCells.worldId, worldId))
-      .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
-    db
-      .select()
-      .from(s.people)
-      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
-      .orderBy(asc(s.people.seq)),
-    db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
-    db.select().from(s.settlements).where(eq(s.settlements.worldId, worldId)).orderBy(asc(s.settlements.seq)),
-    db
-      .select()
-      .from(s.civilizations)
-      .where(eq(s.civilizations.worldId, worldId))
-      .orderBy(asc(s.civilizations.seq)),
-    db
-      .select()
-      .from(s.households)
-      .where(and(eq(s.households.worldId, worldId), isNull(s.households.dissolvedYear)))
-      .orderBy(asc(s.households.seq)),
-    db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
-  ]);
-  const state: WorldState = normalizeState({
-    seed: row.seed,
-    width: row.width,
-    height: row.height,
-    tick: row.currentTick,
-    year: row.currentYear,
-    rng: row.rngState,
-    settings: row.settings,
-    counters: row.counters,
-    climate: row.climate,
-    cells: cells.map(m.cellFromRow),
-    people: people.map(m.personFromRow),
-    tribes: tribes.map(m.tribeFromRow),
-    settlements: settlements.map(m.settlementFromRow),
-    civilizations: civilizations.map(m.civilizationFromRow),
-    households: households.map(m.householdFromRow),
-    relationships: relationships.map(m.relationshipFromRow),
-    archive: { people: [], households: [] },
-  });
+  const [cells, people, tribes, settlements, civilizations, households, relationships, dynasties] =
+    await Promise.all([
+      db
+        .select()
+        .from(s.worldCells)
+        .where(eq(s.worldCells.worldId, worldId))
+        .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
+      db
+        .select()
+        .from(s.people)
+        .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
+        .orderBy(asc(s.people.seq)),
+      db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
+      db
+        .select()
+        .from(s.settlements)
+        .where(eq(s.settlements.worldId, worldId))
+        .orderBy(asc(s.settlements.seq)),
+      db
+        .select()
+        .from(s.civilizations)
+        .where(eq(s.civilizations.worldId, worldId))
+        .orderBy(asc(s.civilizations.seq)),
+      db
+        .select()
+        .from(s.households)
+        .where(and(eq(s.households.worldId, worldId), isNull(s.households.dissolvedYear)))
+        .orderBy(asc(s.households.seq)),
+      db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
+      db.select().from(s.dynasties).where(eq(s.dynasties.worldId, worldId)).orderBy(asc(s.dynasties.seq)),
+    ]);
+  // `migrateState` fills everything a world created by an older engine version is missing.
+  const state: WorldState = normalizeState(
+    migrateState({
+      seed: row.seed,
+      width: row.width,
+      height: row.height,
+      tick: row.currentTick,
+      year: row.currentYear,
+      rng: row.rngState,
+      simulationVersion: row.simulationVersion ?? 1,
+      config: parseSimulationConfig(row.config ?? DEFAULT_SIMULATION_CONFIG),
+      settings: row.settings,
+      counters: row.counters,
+      climate: row.climate,
+      cells: cells.map((c) => m.cellFromRow(row.seed, c)),
+      people: people.map(m.personFromRow),
+      tribes: tribes.map((t) => m.tribeFromRow(row.seed, t)),
+      settlements: settlements.map(m.settlementFromRow),
+      civilizations: civilizations.map(m.civilizationFromRow),
+      households: households.map(m.householdFromRow),
+      relationships: relationships.map(m.relationshipFromRow),
+      dynasties: dynasties.map(m.dynastyFromRow),
+      crises: row.crises ?? [],
+      archive: { people: [], households: [] },
+    }),
+  );
   return { row, state, cellSignatures: state.cells.map(m.cellSignature) };
 }
 
@@ -307,12 +327,29 @@ export async function persistSimulation(
     ["worldId", "id"],
   );
 
+  await bulkUpsert(
+    tx,
+    s.dynasties,
+    state.dynasties.map((d) => m.dynastyToRow(worldId, d)),
+    [s.dynasties.worldId, s.dynasties.id],
+    ["worldId", "id"],
+  );
+
   if (result.events.length)
     await bulkInsert(
       tx,
       s.historicalEvents,
       result.events.map((e) => m.eventToRow(worldId, e)),
     );
+  if (result.civStats.length) {
+    await bulkUpsert(
+      tx,
+      s.civilizationStats,
+      result.civStats.map((st) => m.civStatsToRow(worldId, st)),
+      [s.civilizationStats.worldId, s.civilizationStats.civilizationId, s.civilizationStats.tick],
+      ["worldId", "civilizationId", "tick"],
+    );
+  }
   if (result.stats.length) {
     await bulkUpsert(
       tx,
@@ -356,11 +393,15 @@ export async function persistSimulation(
       counters: state.counters,
       climate: state.climate,
       summary,
+      simulationVersion: SIMULATION_VERSION,
+      config: state.config,
+      crises: state.crises,
       updatedAt: new Date(),
     })
     .where(eq(s.worlds.id, worldId));
 
-  if (Math.floor(row.currentTick / SNAPSHOT_INTERVAL) !== Math.floor(state.tick / SNAPSHOT_INTERVAL)) {
+  const snapshotInterval = state.config.observability.snapshotInterval;
+  if (Math.floor(row.currentTick / snapshotInterval) !== Math.floor(state.tick / snapshotInterval)) {
     const snapshotState = { ...state, archive: { people: [], households: [] } };
     await tx
       .insert(s.worldSnapshots)
@@ -404,12 +445,28 @@ export interface EventQuery {
   pageSize: number;
   types?: string[];
   minImportance?: number;
+  search?: string;
+  fromYear?: number;
+  toYear?: number;
+  actorId?: string;
 }
 
 export async function listEvents(db: Database, worldId: string, q: EventQuery) {
   const filters = [eq(s.historicalEvents.worldId, worldId)];
   if (q.types?.length) filters.push(inArray(s.historicalEvents.type, q.types));
   if (q.minImportance) filters.push(gte(s.historicalEvents.importance, q.minImportance));
+  if (q.fromYear !== undefined) filters.push(gte(s.historicalEvents.year, q.fromYear));
+  if (q.toYear !== undefined) filters.push(lte(s.historicalEvents.year, q.toYear));
+  if (q.search) {
+    // Parameterized: the term never reaches SQL as text.
+    const term = `%${q.search.replace(/[%_\\]/g, (m) => `\\${m}`)}%`;
+    filters.push(
+      sql`(${s.historicalEvents.title} ilike ${term} or ${s.historicalEvents.description} ilike ${term})`,
+    );
+  }
+  if (q.actorId) {
+    filters.push(sql`${s.historicalEvents.actors} @> ${JSON.stringify([{ id: q.actorId }])}::jsonb`);
+  }
   const where = and(...filters);
   const [items, [total]] = await Promise.all([
     db
@@ -440,49 +497,182 @@ export async function getStatsSeries(db: Database, worldId: string, currentTick:
 }
 
 export async function getWorldEntities(db: Database, worldId: string) {
-  const [cells, tribes, settlements, civilizations, relationships, populations, notable, techRows] =
-    await Promise.all([
-      db
-        .select()
-        .from(s.worldCells)
-        .where(eq(s.worldCells.worldId, worldId))
-        .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
-      db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
-      db
-        .select()
-        .from(s.settlements)
-        .where(eq(s.settlements.worldId, worldId))
-        .orderBy(asc(s.settlements.seq)),
-      db
-        .select()
-        .from(s.civilizations)
-        .where(eq(s.civilizations.worldId, worldId))
-        .orderBy(asc(s.civilizations.seq)),
-      db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
-      db
-        .select({
-          tribeId: s.people.tribeId,
-          settlementId: s.people.settlementId,
-          population: count(),
-          adults: sql<number>`count(*) filter (where ${s.people.age} >= 16)`.mapWith(Number),
-          children: sql<number>`count(*) filter (where ${s.people.age} < 16)`.mapWith(Number),
-        })
-        .from(s.people)
-        .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
-        .groupBy(s.people.tribeId, s.people.settlementId),
-      db
-        .select({
-          id: s.people.id,
-          name: s.people.name,
-          age: s.people.age,
-          tribeId: s.people.tribeId,
-          role: s.people.role,
-        })
-        .from(s.people)
-        .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true), eq(s.people.notable, true))),
-      db.select().from(s.worldTechnologies).where(eq(s.worldTechnologies.worldId, worldId)),
-    ]);
-  return { cells, tribes, settlements, civilizations, relationships, populations, notable, techRows };
+  const [
+    cells,
+    tribes,
+    settlements,
+    civilizations,
+    relationships,
+    populations,
+    notable,
+    techRows,
+    dynasties,
+  ] = await Promise.all([
+    db
+      .select()
+      .from(s.worldCells)
+      .where(eq(s.worldCells.worldId, worldId))
+      .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
+    db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
+    db.select().from(s.settlements).where(eq(s.settlements.worldId, worldId)).orderBy(asc(s.settlements.seq)),
+    db
+      .select()
+      .from(s.civilizations)
+      .where(eq(s.civilizations.worldId, worldId))
+      .orderBy(asc(s.civilizations.seq)),
+    db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
+    db
+      .select({
+        tribeId: s.people.tribeId,
+        settlementId: s.people.settlementId,
+        population: count(),
+        adults: sql<number>`count(*) filter (where ${s.people.age} >= 16)`.mapWith(Number),
+        children: sql<number>`count(*) filter (where ${s.people.age} < 16)`.mapWith(Number),
+      })
+      .from(s.people)
+      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
+      .groupBy(s.people.tribeId, s.people.settlementId),
+    db
+      .select({
+        id: s.people.id,
+        name: s.people.name,
+        age: s.people.age,
+        tribeId: s.people.tribeId,
+        role: s.people.role,
+        title: s.people.title,
+        prestige: s.people.prestige,
+      })
+      .from(s.people)
+      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true), eq(s.people.notable, true))),
+    db.select().from(s.worldTechnologies).where(eq(s.worldTechnologies.worldId, worldId)),
+    db.select().from(s.dynasties).where(eq(s.dynasties.worldId, worldId)).orderBy(asc(s.dynasties.seq)),
+  ]);
+  return {
+    cells,
+    tribes,
+    settlements,
+    civilizations,
+    relationships,
+    populations,
+    notable,
+    techRows,
+    dynasties,
+  };
+}
+
+/** Per-civilization series, downsampled like the world one. */
+export async function getCivilizationStatsSeries(
+  db: Database,
+  worldId: string,
+  currentTick: number,
+  maxPoints: number,
+) {
+  const step = Math.max(1, Math.ceil((currentTick + 1) / maxPoints));
+  return db
+    .select()
+    .from(s.civilizationStats)
+    .where(
+      and(
+        eq(s.civilizationStats.worldId, worldId),
+        sql`(${s.civilizationStats.tick} % ${step} = 0 or ${s.civilizationStats.tick} = ${currentTick})`,
+      ),
+    )
+    .orderBy(asc(s.civilizationStats.tick));
+}
+
+/**
+ * Detail of a single person, loaded on demand: the world payload only carries the notable
+ * ones, everybody else is fetched by id.
+ */
+export async function getPersonDetail(db: Database, worldId: string, personId: string) {
+  const [person] = await db
+    .select()
+    .from(s.people)
+    .where(and(eq(s.people.worldId, worldId), eq(s.people.id, personId)))
+    .limit(1);
+  if (!person) return null;
+  const relatives = [person.motherId, person.fatherId].filter((id): id is string => Boolean(id));
+  const [parents, children, household, tribe, settlement, dynasty, events] = await Promise.all([
+    relatives.length
+      ? db
+          .select({ id: s.people.id, name: s.people.name })
+          .from(s.people)
+          .where(and(eq(s.people.worldId, worldId), inArray(s.people.id, relatives)))
+      : Promise.resolve([] as { id: string; name: string }[]),
+    db
+      .select({ id: s.people.id, name: s.people.name, alive: s.people.alive })
+      .from(s.people)
+      .where(
+        and(
+          eq(s.people.worldId, worldId),
+          sql`(${s.people.motherId} = ${personId} or ${s.people.fatherId} = ${personId})`,
+        ),
+      )
+      .limit(40),
+    person.householdId
+      ? db
+          .select()
+          .from(s.households)
+          .where(and(eq(s.households.worldId, worldId), eq(s.households.id, person.householdId)))
+          .limit(1)
+      : Promise.resolve([]),
+    db
+      .select({ id: s.tribes.id, name: s.tribes.name })
+      .from(s.tribes)
+      .where(and(eq(s.tribes.worldId, worldId), eq(s.tribes.id, person.tribeId)))
+      .limit(1),
+    person.settlementId
+      ? db
+          .select({ id: s.settlements.id, name: s.settlements.name })
+          .from(s.settlements)
+          .where(and(eq(s.settlements.worldId, worldId), eq(s.settlements.id, person.settlementId)))
+          .limit(1)
+      : Promise.resolve([]),
+    person.dynastyId
+      ? db
+          .select({ id: s.dynasties.id, name: s.dynasties.name })
+          .from(s.dynasties)
+          .where(and(eq(s.dynasties.worldId, worldId), eq(s.dynasties.id, person.dynastyId)))
+          .limit(1)
+      : Promise.resolve([]),
+    db
+      .select()
+      .from(s.historicalEvents)
+      .where(
+        and(
+          eq(s.historicalEvents.worldId, worldId),
+          sql`${s.historicalEvents.actors} @> ${JSON.stringify([{ id: personId }])}::jsonb`,
+        ),
+      )
+      .orderBy(desc(s.historicalEvents.seq))
+      .limit(25),
+  ]);
+  let partnerId: string | null = null;
+  const h = household[0];
+  // Children keep the household id of their parents: only an actual partner has a partner.
+  if (h && h.dissolvedYear === null && (h.partnerAId === personId || h.partnerBId === personId)) {
+    partnerId = h.partnerAId === personId ? h.partnerBId : h.partnerAId;
+  }
+  const partner = partnerId
+    ? ((
+        await db
+          .select({ id: s.people.id, name: s.people.name })
+          .from(s.people)
+          .where(and(eq(s.people.worldId, worldId), eq(s.people.id, partnerId)))
+          .limit(1)
+      )[0] ?? null)
+    : null;
+  return {
+    person,
+    mother: parents.find((p) => p.id === person.motherId) ?? null,
+    father: parents.find((p) => p.id === person.fatherId) ?? null,
+    partner,
+    children,
+    tribe: tribe[0] ?? null,
+    settlement: settlement[0] ?? null,
+    dynasty: dynasty[0] ?? null,
+    events,
+  };
 }
 
 export async function getLatestSnapshot(db: Database, worldId: string) {

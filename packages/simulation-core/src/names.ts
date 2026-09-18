@@ -112,3 +112,13 @@ export function civilizationName(rng: Rng, tribeName: string): string {
   ];
   return rng.pick(forms);
 }
+
+export function dynastyName(rng: Rng, founderName: string): string {
+  const forms = [
+    `Casa di ${founderName}`,
+    `Stirpe di ${founderName}`,
+    `Discendenti di ${founderName}`,
+    `Linea di ${founderName}`,
+  ];
+  return rng.pick(forms);
+}

@@ -40,6 +40,144 @@ export const EVENT_LABELS: Record<string, string> = {
   alliance: "Alleanza",
   tribe_extinct: "Estinzione",
   conquest: "Conquista",
+  climate: "Clima",
+  epidemic: "Epidemia",
+  leadership: "Guida",
+  unrest: "Tensioni interne",
+  culture: "Cultura",
+  settlement_growth: "Crescita urbana",
+};
+
+export const IMPORTANCE_LABELS: Record<number, string> = {
+  1: "micro-evento",
+  2: "evento locale",
+  3: "evento importante",
+  4: "evento regionale",
+  5: "svolta storica",
+};
+
+export const SEASON_LABELS: Record<string, string> = {
+  spring: "Primavera",
+  summer: "Estate",
+  autumn: "Autunno",
+  winter: "Inverno",
+};
+
+export const GOVERNMENT_LABELS: Record<string, string> = {
+  clan: "Clan",
+  elder_council: "Consiglio degli anziani",
+  chiefdom: "Chiefdom",
+  tribal_monarchy: "Monarchia tribale",
+  city_state: "Città-stato",
+  merchant_republic: "Repubblica mercantile",
+};
+
+export const TIER_LABELS: Record<string, string> = {
+  camp: "Accampamento",
+  village: "Villaggio",
+  town: "Città",
+  city_state: "Città-stato",
+  capital: "Capitale",
+};
+
+export const DISTRIBUTION_LABELS: Record<string, string> = {
+  egalitarian: "Egualitaria",
+  workers: "Ai lavoratori",
+  warriors: "Ai guerrieri",
+  elite: "Alle élite",
+};
+
+export const CULTURE_LABELS: Record<string, string> = {
+  cooperation: "Cooperazione",
+  militarism: "Militarismo",
+  tradeOpenness: "Apertura al commercio",
+  traditionalism: "Tradizionalismo",
+  centralization: "Centralizzazione",
+  hierarchy: "Gerarchia sociale",
+  spirituality: "Spiritualità",
+  innovation: "Innovazione",
+  expansionism: "Espansionismo",
+};
+
+export const STABILITY_LABELS: Record<string, string> = {
+  happiness: "Benessere",
+  cohesion: "Coesione",
+  legitimacy: "Legittimità",
+  tension: "Tensione sociale",
+  order: "Ordine pubblico",
+  corruption: "Corruzione",
+  revoltRisk: "Rischio rivolta",
+};
+
+export const DIPLOMATIC_LABELS: Record<string, string> = {
+  unknown: "Sconosciuti",
+  contact: "In contatto",
+  neutral: "Neutrali",
+  trade_partner: "Partner commerciali",
+  allied: "Alleati",
+  rival: "Rivali",
+  war: "In guerra",
+  truce: "Tregua",
+};
+
+export const PHASE_LABELS: Record<string, string> = {
+  peace: "Pace",
+  tension: "Tensione",
+  demand: "Richieste",
+  threat: "Minaccia",
+  raid: "Incursioni",
+  war: "Guerra",
+  truce: "Tregua",
+};
+
+export const TITLE_LABELS: Record<string, string> = {
+  chief: "Capo",
+  elder: "Anziano",
+  commander: "Comandante",
+  founder: "Fondatore",
+  ruler: "Sovrano",
+  inventor: "Inventore",
+};
+
+export const ROLE_LABELS: Record<string, string> = {
+  child: "Bambino",
+  gatherer: "Raccoglitore",
+  hunter: "Cacciatore",
+  builder: "Costruttore",
+  elder: "Anziano",
+  leader: "Guida",
+  farmer: "Agricoltore",
+  warrior: "Guerriero",
+  herder: "Allevatore",
+  fisher: "Pescatore",
+  miner: "Minatore",
+  crafter: "Artigiano",
+};
+
+export const RESOURCE_LABELS: Record<string, string> = {
+  food: "Cibo",
+  water: "Acqua",
+  wood: "Legname",
+  stone: "Pietra",
+  clay: "Argilla",
+  hides: "Pelli e tessuti",
+  copper: "Rame",
+  tin: "Stagno",
+  iron: "Ferro",
+  fuel: "Combustibile",
+  tools: "Strumenti",
+  wealth: "Ricchezza",
+};
+
+export const CRISIS_LABELS: Record<string, string> = {
+  epidemic: "Epidemia",
+  famine: "Carestia",
+  drought: "Siccità",
+  flood: "Alluvione",
+  wildfire: "Incendio",
+  harsh_winter: "Inverno rigido",
+  revolt: "Rivolta",
+  succession: "Crisi di successione",
 };
 
 export const BUILDING_LABELS: Record<string, string> = {
@@ -49,6 +187,17 @@ export const BUILDING_LABELS: Record<string, string> = {
   farm: "Campi",
   road: "Strade",
   palisade: "Palizzate",
+  pasture: "Pascoli",
+  well: "Pozzi",
+  quarry: "Cave",
+  mine: "Miniere",
+  kiln: "Fornaci",
+  foundry: "Fonderie",
+  market: "Mercati",
+  temple: "Templi",
+  barracks: "Caserme",
+  walls: "Mura",
+  port: "Porti",
 };
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -72,12 +221,32 @@ export function eventTone(type: string): "war" | "growth" | "ochre" | "water" | 
       "settlement_collapse",
       "tribe_extinct",
       "notable_death",
+      "epidemic",
+      "unrest",
     ].includes(type)
   )
     return "war";
-  if (["settlement_founded", "population_growth", "civilization_founded", "birth"].includes(type))
+  if (
+    [
+      "settlement_founded",
+      "population_growth",
+      "civilization_founded",
+      "birth",
+      "settlement_growth",
+    ].includes(type)
+  )
     return "growth";
-  if (["tech_discovered", "construction"].includes(type)) return "ochre";
-  if (["trade", "peace", "alliance", "migration"].includes(type)) return "water";
+  if (["tech_discovered", "construction", "leadership", "culture"].includes(type)) return "ochre";
+  if (["trade", "peace", "alliance", "migration", "climate"].includes(type)) return "water";
   return "neutral";
+}
+
+/** Reads a numeric metadata value without trusting the shape of the stored JSON. */
+export function metaNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function metaText(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }

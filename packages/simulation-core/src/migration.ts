@@ -1,6 +1,7 @@
 import { TRIBE_COLORS } from "./constants";
 import type { Community, SimContext } from "./context";
 import { emptyStock, nextId } from "./context";
+import { initialStability } from "./culture";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { cellsInRadius, distance } from "./grid";
 import { tribeName } from "./names";
@@ -73,15 +74,27 @@ export function migrateBand(ctx: SimContext, community: Community, hostileNearby
     p.y = best.y;
     p.energy = Math.max(0, p.energy - 0.2);
   }
+  ctx.counters.migrations += community.members.length;
   if (dist >= 3) {
+    const drought = ctx.state.climate.hazards.filter((h) => distance(h.x, h.y, from.x, from.y) <= h.radius);
     const why =
-      scarcity >= 1
-        ? `Dopo ${scarcity === 1 ? "un anno" : `${scarcity} anni`} di scarsità`
-        : hostileNearby
-          ? "Per sfuggire a vicini ostili"
-          : "In cerca di terre più ricche";
+      drought.length > 0
+        ? `Spinti dalla ${drought[0]?.kind === "drought" ? "siccità" : "calamità"}`
+        : scarcity >= 1
+          ? `Dopo ${scarcity === 1 ? "un anno" : `${scarcity} anni`} di scarsità`
+          : hostileNearby
+            ? "Per sfuggire a vicini ostili"
+            : "In cerca di terre più ricche";
     emitEvent(ctx, {
       type: "migration",
+      subtype:
+        drought.length > 0
+          ? "climate"
+          : scarcity >= 1
+            ? "scarcity"
+            : hostileNearby
+              ? "threat"
+              : "opportunity",
       importance: 2,
       actors: [actor.tribe(tribe)],
       x: best.x,
@@ -94,7 +107,10 @@ export function migrateBand(ctx: SimContext, community: Community, hostileNearby
         distance: dist,
         scarcityYears: scarcity,
         population: community.members.length,
+        hostileNearby,
+        hazards: drought.map((h) => h.kind).join(","),
       },
+      causeEventIds: drought.map((h) => h.eventId).filter((id): id is string => Boolean(id)),
     });
   }
   return true;
@@ -117,6 +133,13 @@ function newRelationship(a: Tribe, b: Tribe, year: number, trust: number): Relat
     lastInteractionYear: year,
     battles: 0,
     truceUntilYear: null,
+    respect: 0.3,
+    tradeDependency: 0,
+    culturalDistance: 0,
+    status: "neutral",
+    phase: "peace",
+    lastConflictYear: null,
+    phaseYears: 0,
   };
 }
 
@@ -147,6 +170,7 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     stock: emptyStock(),
     techs: [...parent.techs],
     techProgress: { ...parent.techProgress },
+    techAdoption: { ...parent.techAdoption },
     foundedYear: ctx.state.year,
     civilizationId: null,
     leaderId: null,
@@ -154,6 +178,11 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     populationMilestone: 0,
     yearsAtLocation: 0,
     scarcityYears: 0,
+    culture: { ...parent.culture },
+    government: "clan",
+    stability: initialStability(),
+    dynastyId: null,
+    lastLeaderChangeYear: null,
   };
   child.stock.food = Math.round(parent.stock.food * 0.4 * 100) / 100;
   parent.stock.food = Math.round((parent.stock.food - child.stock.food) * 100) / 100;
@@ -168,8 +197,10 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     if (partner && moving.has(partner.id)) h.tribeId = child.id;
   }
   ctx.state.relationships.push(newRelationship(parent, child, ctx.state.year, 0.6));
+  ctx.counters.migrations += moving.size;
   emitEvent(ctx, {
     type: "migration",
+    subtype: "split",
     importance: 3,
     actors: [actor.tribe(child), actor.tribe(parent)],
     x: parent.x,
@@ -214,8 +245,10 @@ export function joinNearbyGroup(
   tribe.stock = emptyStock();
   tribe.status = "extinct";
   tribe.extinctYear = ctx.state.year;
+  ctx.counters.migrations += members.length;
   emitEvent(ctx, {
     type: "migration",
+    subtype: "absorption",
     importance: 3,
     actors: [actor.tribe(tribe), actor.tribe(host.tribe)],
     x: host.x,

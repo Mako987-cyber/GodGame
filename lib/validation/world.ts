@@ -22,6 +22,12 @@ export const EVENT_TYPES = [
   "alliance",
   "tribe_extinct",
   "conquest",
+  "climate",
+  "epidemic",
+  "leadership",
+  "unrest",
+  "culture",
+  "settlement_growth",
 ] as const;
 
 const mapSize = z.coerce.number().int().min(MIN_MAP_SIZE).max(MAX_MAP_SIZE);
@@ -49,6 +55,8 @@ export const updateWorldSchema = z.object({
   status: z.enum(["running", "paused"]),
 });
 
+const yearSchema = z.coerce.number().int().min(-1_000_000).max(1_000_000);
+
 export const eventsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -58,11 +66,37 @@ export const eventsQuerySchema = z.object({
     .transform((v) => (v ? v.split(",").filter(Boolean) : undefined))
     .pipe(z.array(z.enum(EVENT_TYPES)).optional()),
   minImportance: z.coerce.number().int().min(1).max(5).optional(),
+  /** Free-text search on title and description. */
+  search: z.string().trim().max(120).optional(),
+  /** Inclusive year range. */
+  fromYear: yearSchema.optional(),
+  toYear: yearSchema.optional(),
+  /** Restricts to the events one entity (tribe, settlement, civilization, person) took part in. */
+  actorId: z
+    .string()
+    .trim()
+    .max(64)
+    .regex(/^[a-z]{1,3}\d+$/i, "Identificativo attore non valido")
+    .optional(),
 });
 export type EventsQuery = z.infer<typeof eventsQuerySchema>;
 
 export const statsQuerySchema = z.object({
   maxPoints: z.coerce.number().int().min(10).max(2000).default(400),
+  civilizations: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
 });
+
+export const personIdSchema = z
+  .string()
+  .trim()
+  .regex(/^p\d+$/, "Identificativo persona non valido");
+
+export const entityIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z]{1,3}\d+$/i, "Identificativo non valido");
 
 export const worldIdSchema = z.string().uuid();

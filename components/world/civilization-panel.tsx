@@ -4,9 +4,21 @@ import { MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CivilizationDTO, TribeDTO, WorldDetail } from "@/lib/dto";
-import { fmtInt, fmtPct, fmtYear, STATUS_LABELS } from "@/lib/client/format";
+import {
+  CULTURE_LABELS,
+  DIPLOMATIC_LABELS,
+  DISTRIBUTION_LABELS,
+  GOVERNMENT_LABELS,
+  PHASE_LABELS,
+  STABILITY_LABELS,
+  TIER_LABELS,
+  fmtInt,
+  fmtPct,
+  fmtYear,
+  STATUS_LABELS,
+} from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
-import { EntityLink, Facts, Meter, StockList, SubHeading } from "./stat-bits";
+import { EntityLink, Facts, Meter, StockList, SubHeading, TraitList } from "./stat-bits";
 
 export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDetail }) {
   const { select, focusOn } = useWorldUi();
@@ -57,6 +69,12 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
             ),
           ],
           ["Cibo prodotto (ultimo anno)", fmtInt(tribe.lastFoodProduced)],
+          ["Governo", GOVERNMENT_LABELS[tribe.government] ?? tribe.government],
+          ["Distribuzione", DISTRIBUTION_LABELS[tribe.distribution] ?? tribe.distribution],
+          [
+            "Dinastia",
+            tribe.dynasty ? `${tribe.dynasty.name} (${fmtInt(tribe.dynasty.rulers)} guide)` : "Nessuna",
+          ],
         ]}
       />
       {tribe.status !== "extinct" && (
@@ -73,6 +91,23 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           {tribe.scarcityYears > 0 && (
             <p className="text-war mt-1 text-xs">{tribe.scarcityYears} anni di scarsità.</p>
           )}
+          <SubHeading>Stabilità interna</SubHeading>
+          <div className="grid gap-1.5">
+            <Meter label={STABILITY_LABELS.happiness!} value={tribe.stability.happiness} tone="growth" />
+            <Meter label={STABILITY_LABELS.cohesion!} value={tribe.stability.cohesion} tone="growth" />
+            <Meter label={STABILITY_LABELS.legitimacy!} value={tribe.stability.legitimacy} tone="ochre" />
+            <Meter label={STABILITY_LABELS.order!} value={tribe.stability.order} tone="ochre" />
+            <Meter label={STABILITY_LABELS.tension!} value={tribe.stability.tension} tone="war" />
+            <Meter label={STABILITY_LABELS.corruption!} value={tribe.stability.corruption} tone="war" />
+            <Meter label={STABILITY_LABELS.revoltRisk!} value={tribe.stability.revoltRisk} tone="war" />
+          </div>
+          {tribe.stability.unrestYears > 0 && (
+            <p className="text-war mt-1 text-xs">
+              Malcontento da {tribe.stability.unrestYears} anni consecutivi.
+            </p>
+          )}
+          <SubHeading>Cultura</SubHeading>
+          <TraitList traits={tribe.culture} labels={CULTURE_LABELS} />
           {tribe.status === "nomadic" && (
             <>
               <SubHeading>Scorte della banda</SubHeading>
@@ -88,10 +123,13 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
         <ul className="grid gap-1.5 text-sm">
           {tribe.techs.map((id) => {
             const def = detail.technologies.find((t) => t.id === id);
+            const adoption = tribe.techAdoption[id] ?? 1;
             return (
               <li key={id} className="flex justify-between gap-2">
-                <span>{def?.name ?? id}</span>
-                <span className="text-muted text-xs">{def?.effectSummary}</span>
+                <span title={def?.description}>{def?.name ?? id}</span>
+                <span className="text-muted text-xs">
+                  {adoption < 0.95 ? `adozione ${fmtPct(adoption)}` : def?.effectSummary}
+                </span>
               </li>
             );
           })}
@@ -110,7 +148,7 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
               <li key={s.id} className="flex justify-between gap-2">
                 <EntityLink onClick={() => select({ kind: "settlement", id: s.id })}>{s.name}</EntityLink>
                 <span className="text-muted">
-                  livello {s.level}, {fmtInt(s.population)} ab.
+                  {TIER_LABELS[s.tier] ?? `livello ${s.level}`}, {fmtInt(s.population)} ab.
                 </span>
               </li>
             ))}
@@ -128,18 +166,32 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
                 <EntityLink color={r.other!.color} onClick={() => select({ kind: "tribe", id: r.other!.id })}>
                   {r.other!.name}
                 </EntityLink>
-                <span className="flex gap-1">
-                  {r.atWar && <Badge tone="war">In guerra dal {fmtYear(r.warStartYear ?? 0)}</Badge>}
-                  {r.allied && <Badge tone="growth">Alleati</Badge>}
+                <span className="flex flex-wrap gap-1">
+                  <Badge tone={r.atWar ? "war" : r.allied ? "growth" : "neutral"}>
+                    {DIPLOMATIC_LABELS[r.status] ?? r.status}
+                  </Badge>
+                  {r.atWar && <Badge tone="war">Dal {fmtYear(r.warStartYear ?? 0)}</Badge>}
+                  {!r.atWar && r.phase !== "peace" && (
+                    <Badge tone="war">{PHASE_LABELS[r.phase] ?? r.phase}</Badge>
+                  )}
                   {r.tradeVolume > 1 && <Badge tone="water">Commercio {fmtInt(r.tradeVolume)}</Badge>}
                   <Badge>{r.distance} celle</Badge>
                 </span>
               </div>
               <Meter label="Fiducia" value={r.trust} tone="growth" />
               <Meter label="Ostilità" value={r.hostility} tone="war" />
-              {r.conflictMemory > 0.05 && (
-                <p className="text-muted text-xs">Memoria dei conflitti: {fmtPct(r.conflictMemory)}</p>
-              )}
+              <div className="text-muted grid gap-0.5 text-xs">
+                {r.conflictMemory > 0.05 && <p>Memoria dei conflitti: {fmtPct(r.conflictMemory)}</p>}
+                {r.respect > 0.05 && <p>Rispetto reciproco: {fmtPct(r.respect)}</p>}
+                {r.tradeDependency > 0.05 && <p>Dipendenza commerciale: {fmtPct(r.tradeDependency)}</p>}
+                <p>Distanza culturale: {fmtPct(r.culturalDistance)}</p>
+                {r.battles > 0 && (
+                  <p>
+                    {fmtInt(r.battles)} scontri
+                    {r.lastConflictYear !== null ? `, ultimo nel ${fmtYear(r.lastConflictYear)}` : ""}
+                  </p>
+                )}
+              </div>
             </li>
           ))}
         </ul>
@@ -157,6 +209,19 @@ export function CivilizationPanel({ civ, detail }: { civ: CivilizationDTO; detai
   const { select } = useWorldUi();
   const capital = detail.settlements.find((s) => s.id === civ.capitalSettlementId);
   const founder = detail.tribes.find((t) => t.id === civ.founderTribeId);
+  const memberTribes = detail.tribes.filter((t) => civ.tribeIds.includes(t.id));
+  const memberIds = new Set(civ.tribeIds);
+  const wars = detail.relationships
+    .filter((r) => r.atWar && (memberIds.has(r.aId) || memberIds.has(r.bId)))
+    .map((r) => {
+      const otherId = memberIds.has(r.aId) ? r.bId : r.aId;
+      return {
+        id: r.aId + r.bId,
+        against: detail.tribes.find((t) => t.id === otherId)?.name ?? otherId,
+        since: r.warStartYear,
+      };
+    });
+  const techs = new Set(memberTribes.flatMap((t) => t.techs));
   return (
     <div>
       <div className="mb-3 flex items-start justify-between gap-2">
@@ -170,6 +235,7 @@ export function CivilizationPanel({ civ, detail }: { civ: CivilizationDTO; detai
         items={[
           ["Popolazione", fmtInt(civ.population)],
           ["Insediamenti", fmtInt(civ.settlementIds.length)],
+          ["Tecnologie", `${techs.size} / ${detail.technologies.length}`],
           [
             "Capitale",
             capital ? (
@@ -192,6 +258,41 @@ export function CivilizationPanel({ civ, detail }: { civ: CivilizationDTO; detai
           ],
         ]}
       />
+      <SubHeading>Governo e stabilità</SubHeading>
+      {memberTribes.length === 0 ? (
+        <p className="text-muted text-sm">Nessuna tribù attiva.</p>
+      ) : (
+        <ul className="grid gap-2 text-sm">
+          {memberTribes.map((t) => (
+            <li key={t.id} className="grid gap-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <EntityLink color={t.color} onClick={() => select({ kind: "tribe", id: t.id })}>
+                  {t.name}
+                </EntityLink>
+                <span className="text-muted text-xs">
+                  {GOVERNMENT_LABELS[t.government] ?? t.government}
+                  {t.dynasty ? ` · ${t.dynasty.name}` : ""}
+                </span>
+              </div>
+              <Meter label="Legittimità" value={t.stability.legitimacy} tone="ochre" />
+              <Meter label="Coesione" value={t.stability.cohesion} tone="growth" />
+            </li>
+          ))}
+        </ul>
+      )}
+      {wars.length > 0 && (
+        <>
+          <SubHeading>Guerre in corso</SubHeading>
+          <ul className="grid gap-1 text-sm">
+            {wars.map((w) => (
+              <li key={w.id} className="flex justify-between gap-2">
+                <span>{w.against}</span>
+                <span className="text-muted text-xs">dal {fmtYear(w.since ?? 0)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <SubHeading>Insediamenti</SubHeading>
       <ul className="grid gap-1 text-sm">
         {civ.settlementIds.map((id) => {

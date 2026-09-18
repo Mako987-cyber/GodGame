@@ -1,7 +1,7 @@
 "use client";
 
 import type { WorldDetail } from "@/lib/dto";
-import { BIOME_LABELS, fmtDec, fmtInt, fmtPct } from "@/lib/client/format";
+import { BIOME_LABELS, CRISIS_LABELS, fmtDec, fmtInt, fmtPct } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
 import { EntityLink, Facts, Meter, SubHeading } from "./stat-bits";
 
@@ -12,6 +12,10 @@ export function CellPanel({ x, y, detail }: { x: number; y: number; detail: Worl
   const owner = detail.tribes[m.owner[i] ?? -1];
   const settlement = detail.settlements[m.settlement[i] ?? -1];
   const at = (arr: number[]) => arr[i] ?? 0;
+  // Hazards are world-level: a cell shows the ones whose radius covers it.
+  const hazards = detail.world.climate.hazards.filter(
+    (h) => Math.max(Math.abs(h.x - x), Math.abs(h.y - y)) <= h.radius,
+  );
   return (
     <div>
       <h2 className="font-serif text-2xl">{BIOME_LABELS[at(m.biome)]}</h2>
@@ -33,8 +37,12 @@ export function CellPanel({ x, y, detail }: { x: number; y: number; detail: Worl
           ["Legname", fmtDec(at(m.wood))],
           ["Pietra", fmtInt(at(m.stone))],
           ["Rame", at(m.copper) > 0 ? fmtInt(at(m.copper)) : "Assente"],
+          ["Stagno", at(m.tin) > 0 ? fmtInt(at(m.tin)) : "Assente"],
           ["Ferro", at(m.iron) > 0 ? fmtInt(at(m.iron)) : "Assente"],
+          ["Carbone", at(m.coal) > 0 ? fmtInt(at(m.coal)) : "Assente"],
+          ["Argilla", at(m.clay) > 0 ? fmtInt(at(m.clay)) : "Assente"],
           ["Campi coltivati", fmtInt(at(m.fields))],
+          ["Pascoli", fmtInt(at(m.pastures))],
         ]}
       />
       <SubHeading>Clima e rilievo</SubHeading>
@@ -46,6 +54,11 @@ export function CellPanel({ x, y, detail }: { x: number; y: number; detail: Worl
           ["Strada", at(m.road) ? "Sì" : "No"],
         ]}
       />
+      {hazards.length > 0 && (
+        <p className="text-war mt-2 text-sm">
+          Calamità in corso: {hazards.map((h) => CRISIS_LABELS[h.kind] ?? h.kind).join(", ")}.
+        </p>
+      )}
       <SubHeading>Controllo</SubHeading>
       <Facts
         items={[

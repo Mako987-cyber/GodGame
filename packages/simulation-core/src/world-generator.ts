@@ -1,9 +1,14 @@
 import { createPerson } from "./agents";
+import { computeSeasons } from "./climate";
+import { parseSimulationConfig, type SimulationConfig } from "./config";
 import { DEFAULT_SETTINGS, TRIBE_COLORS } from "./constants";
 import { nextId } from "./context";
+import { initialStability, randomCulture } from "./culture";
 import { cellsInRadius, clamp, distance } from "./grid";
 import { tribeName } from "./names";
+import { SIMULATION_VERSION } from "./normalize";
 import { deriveRng, Rng } from "./prng";
+import { emptyStock } from "./stock";
 import { generateTerrain } from "./terrain";
 import type { Cell, Household, Person, Tribe, WorldSettings, WorldState } from "./types";
 
@@ -12,6 +17,8 @@ export interface CreateWorldOptions {
   width?: number;
   height?: number;
   settings?: Partial<WorldSettings>;
+  /** Partial simulation configuration; missing values fall back to the defaults. */
+  config?: unknown;
 }
 
 function areaScore(state: WorldState, cell: Cell): number {
@@ -61,9 +68,29 @@ export function createWorld(options: CreateWorldOptions): WorldState {
     tick: 0,
     year: settings.startYear,
     rng: rng.getState(),
+    simulationVersion: SIMULATION_VERSION,
+    config: parseSimulationConfig(options.config) satisfies SimulationConfig,
     settings,
-    counters: { person: 0, tribe: 0, settlement: 0, civilization: 0, household: 0, event: 0 },
-    climate: { modifier: 1, droughts: [] },
+    counters: {
+      person: 0,
+      tribe: 0,
+      settlement: 0,
+      civilization: 0,
+      household: 0,
+      event: 0,
+      dynasty: 0,
+      construction: 0,
+      crisis: 0,
+    },
+    climate: {
+      modifier: 1,
+      droughts: [],
+      hazards: [],
+      trend: 0,
+      seasons: [],
+      harshWinter: false,
+      winterSeverity: 0.5,
+    },
     cells,
     people: [],
     tribes: [],
@@ -71,8 +98,11 @@ export function createWorld(options: CreateWorldOptions): WorldState {
     civilizations: [],
     households: [],
     relationships: [],
+    dynasties: [],
+    crises: [],
     archive: { people: [], households: [] },
   };
+  state.climate.seasons = computeSeasons(state, false);
 
   const tribeCount = rng.int(settings.minTribes, settings.maxTribes);
   const starts = pickStartingCells(state, tribeCount, rng);
@@ -90,9 +120,10 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       status: "nomadic",
       x: cell.x,
       y: cell.y,
-      stock: { food: 0, wood: 0, stone: 0, copper: 0 },
+      stock: emptyStock(),
       techs: [],
       techProgress: {},
+      techAdoption: {},
       yearsAtLocation: 0,
       scarcityYears: 0,
       foundedYear: state.year,
@@ -105,6 +136,12 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       lastFoodProduced: 0,
       lastFoodConsumed: 0,
       lastFoodRatio: 1,
+      culture: randomCulture(rng),
+      government: "clan",
+      stability: initialStability(),
+      distribution: parseSimulationConfig(options.config).economy.defaultDistribution,
+      dynastyId: null,
+      lastLeaderChangeYear: null,
     };
     state.tribes.push(tribe);
     const members = populateTribe(state, tribe, rng.int(settings.minTribeSize, settings.maxTribeSize), rng);
@@ -121,6 +158,10 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       tribe.leaderId = leader.id;
       leader.role = "leader";
       leader.notable = true;
+      leader.title = "chief";
+      leader.titleSinceYear = state.year;
+      leader.prestige = clamp(leader.prestige + 0.4);
+      leader.skills.leadership = clamp(leader.skills.leadership + 0.2);
     }
   }
   return state;

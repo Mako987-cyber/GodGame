@@ -1,42 +1,59 @@
 import { applyActionEffects, assignRole, chooseAction, type CommunityNeeds } from "./agents";
+import { averageTemperature, climateStress, definingSeason, hazardsAt, updateClimate } from "./climate";
+import { ECONOMY } from "./constants";
 import { buildIndexes, emptyCounters, type Community, type SimContext } from "./context";
+import { expireCrises, tryRevolt, updateEpidemics } from "./crises";
+import {
+  culturalDistance,
+  updateCulture,
+  updateDistribution,
+  updateGovernment,
+  updateStability,
+} from "./culture";
 import { buildProfiles, updateDiplomacy } from "./diplomacy";
-import { consume, produce, redistributeFood, roundStock } from "./economy";
+import { consume, foodNeed, produce, redistributeFood } from "./economy";
 import { actor, describePlace, emitEvent } from "./events";
-import { clamp, distance } from "./grid";
+import { clamp, distance, round } from "./grid";
+import { assertInvariants } from "./invariants";
+import { ensureLeader, tryCoup, updateLeaderStanding } from "./leadership";
 import { joinNearbyGroup, migrateBand, splitBand } from "./migration";
 import {
   ageAndNaturalDeaths,
   births,
   checkPopulationMilestone,
   crossCommunityMarriages,
-  ensureLeader,
+  educateCommunity,
   formHouseholds,
   householdMap,
   isPartner,
   starvationDeaths,
+  updatePrestige,
 } from "./population";
 import { Rng } from "./prng";
+import { regenerateResources, workArea } from "./resources";
 import { normalizeState } from "./serialization";
-import { regenerateResources, updateClimate, workArea } from "./resources";
 import {
   canFoundSettlement,
   checkCivilization,
   checkCollapse,
   foundSettlement,
+  payUpkeep,
   progressConstruction,
   trySecession,
   trySpawnDaughter,
   updateSettlementStats,
   updateTerritory,
 } from "./settlements";
-import { advanceResearch, techEffects } from "./technology";
-import type { SimulationResult, TickStats, Tribe, WorldState } from "./types";
+import { advanceResearch, tribeEffects } from "./technology";
+import { getResourceAmount, roundStock, stockValue } from "./stock";
+import type { CivilizationStats, SimulationResult, TickStats, Tribe, WorldState } from "./types";
 
 export interface RunOptions {
   /** Epoch ms after which no new tick is started (the batch returns as partial). */
   deadline?: number;
   now?: () => number;
+  /** Runs the integrity checks after every tick (development and tests). */
+  checkInvariants?: boolean;
 }
 
 export function createContext(state: WorldState): SimContext {
@@ -49,6 +66,7 @@ export function createContext(state: WorldState): SimContext {
     settlements: new Map(),
     people: new Map(),
     communities: [],
+    emitted: new Map(),
   };
   buildIndexes(ctx);
   return ctx;
@@ -62,6 +80,7 @@ export function runSimulation(state: WorldState, ticks: number, options: RunOpti
   const ctx = createContext(state);
   const now = options.now ?? Date.now;
   const stats: TickStats[] = [];
+  const civStats: CivilizationStats[] = [];
   let ticksRun = 0;
   let partial = false;
   for (let i = 0; i < ticks; i++) {
@@ -71,10 +90,14 @@ export function runSimulation(state: WorldState, ticks: number, options: RunOpti
     }
     runTick(ctx);
     stats.push(collectStats(ctx));
+    if (state.tick % state.config.observability.civStatsInterval === 0) {
+      civStats.push(...collectCivilizationStats(ctx));
+    }
+    if (options.checkInvariants) assertInvariants(state, { events: ctx.events });
     ticksRun++;
   }
   state.rng = ctx.rng.getState();
-  return { ticksRun, partial, events: ctx.events, stats };
+  return { ticksRun, partial, events: ctx.events, stats, civStats };
 }
 
 export function buildCommunities(ctx: SimContext) {
@@ -156,20 +179,39 @@ function computeThreat(ctx: SimContext) {
   }
 }
 
-function computeNeeds(c: Community): CommunityNeeds {
+function computeNeeds(ctx: SimContext, c: Community): CommunityNeeds {
   const stockPerCapita = c.stock.food / Math.max(1, c.members.length);
-  const fields = c.settlement
-    ? c.area
-        .filter((cell) => cell.settlementId === c.settlement?.id)
-        .reduce((acc, cell) => acc + cell.fields, 0)
+  const owned = c.settlement ? c.area.filter((cell) => cell.settlementId === c.settlement?.id) : [];
+  const fields = owned.reduce((acc, cell) => acc + cell.fields, 0);
+  const pastures = owned.reduce((acc, cell) => acc + cell.pastures, 0);
+  const techs = c.tribe.techs;
+  const project = c.settlement?.construction ?? null;
+  // How much raw material the group still owes to its own building site.
+  const materialsNeeded = project
+    ? Object.entries(project.requiredResources).reduce(
+        (acc, [kind, amount]) => acc + Math.max(0, amount - (project.deliveredResources[kind as never] ?? 0)),
+        0,
+      )
     : 0;
+  const deposits = c.area.reduce(
+    (acc, cell) => acc + cell.copper + cell.tin + cell.iron + cell.coal + cell.clay,
+    0,
+  );
+  const tools = getResourceAmount(c.stock, "tools");
   return {
     food: clamp(0.4 + (1 - Math.min(1, c.foodRatio)) * 1.2 + Math.max(0, 0.8 - stockPerCapita) * 0.5),
-    build: c.settlement ? (c.settlement.construction ? 0.7 : 0.35) : 0,
+    build: c.settlement ? (project ? 0.7 : 0.35) : 0,
     threat: c.threat,
     migration: c.kind === "band" && c.tribe.scarcityYears >= 1 ? 0.6 : 0,
-    farmSlots: fields * 4,
-    canFarm: c.tribe.techs.includes("agriculture") && fields > 0,
+    farmSlots: fields * ECONOMY.farmersPerField,
+    canFarm: techs.includes("agriculture") && fields > 0,
+    pastureSlots: pastures * ECONOMY.herdersPerPasture,
+    canHerd: techs.includes("animal_husbandry") && pastures > 0,
+    canFish: techs.includes("fishing") && c.area.some((cell) => cell.river || cell.coastal),
+    minerals: clamp(materialsNeeded / 40 + (deposits > 0 ? 0.3 : 0)),
+    canMine: deposits > 5 && (techs.includes("copper_working") || techs.includes("pottery")),
+    crafts: clamp(0.3 + Math.max(0, 1 - tools / Math.max(1, c.members.length)) * 0.6),
+    canCraft: techs.includes("copper_working") || techs.includes("weaving") || techs.includes("smelting"),
   };
 }
 
@@ -177,6 +219,19 @@ function tribesAlive(ctx: SimContext): Tribe[] {
   return ctx.state.tribes.filter((t) => t.status !== "extinct");
 }
 
+/**
+ * One year of the world, in a fixed and documented order. The sequence never changes:
+ * the same state with the same RNG always produces the same next state.
+ *
+ *  1. climate and seasons          9. infrastructure and construction
+ *  2. resource regeneration       10. technology and diffusion
+ *  3. needs, roles and health     11. culture, government and stability
+ *  4. labour assignment           12. trade
+ *  5. production                  13. diplomacy and conflicts
+ *  6. distribution and consumption 14. war
+ *  7. demography                  15. crises and events
+ *  8. migration                   16. metrics
+ */
 export function runTick(ctx: SimContext) {
   const { state, rng } = ctx;
   // Canonical ordering every tick: batch size and DB reloads must not change iteration order.
@@ -184,25 +239,29 @@ export function runTick(ctx: SimContext) {
   state.tick += 1;
   state.year += 1;
   ctx.counters = emptyCounters();
+  ctx.emitted.clear();
   buildIndexes(ctx);
 
-  // 1-2. Climate and resource regeneration.
+  // 1-2. Climate, seasons and resource regeneration.
   updateClimate(ctx);
   regenerateResources(state);
   buildCommunities(ctx);
   computeThreat(ctx);
 
-  // 3. Leadership, roles and actions.
+  // 3-4. Leadership, roles and actions.
   const households = householdMap(ctx);
+  const effectsByTribe = new Map<string, ReturnType<typeof tribeEffects>>();
   for (const tribe of tribesAlive(ctx)) {
+    effectsByTribe.set(tribe.id, tribeEffects(tribe));
     ensureLeader(
       ctx,
       tribe,
       ctx.communities.filter((c) => c.tribe.id === tribe.id).flatMap((c) => c.members),
     );
   }
+  const effectsOf = (tribe: Tribe) => effectsByTribe.get(tribe.id) ?? tribeEffects(tribe);
   for (const c of ctx.communities) {
-    const needs = computeNeeds(c);
+    const needs = computeNeeds(ctx, c);
     const hasMilitary = c.tribe.techs.includes("military_org");
     for (const p of c.members) {
       p.role = assignRole(p, needs, c.tribe.leaderId === p.id, hasMilitary, rng);
@@ -211,29 +270,36 @@ export function runTick(ctx: SimContext) {
     }
   }
 
-  // 4-6. Production, consumption, hunger and health.
+  // 5-6. Production, consumption, hunger and health.
   for (const tribe of state.tribes) {
     tribe.lastFoodProduced = 0;
     tribe.lastFoodConsumed = 0;
   }
   const productions = new Map<Community, ReturnType<typeof produce>>();
-  for (const c of ctx.communities) productions.set(c, produce(ctx, c, techEffects(c.tribe.techs)));
+  for (const c of ctx.communities) productions.set(c, produce(ctx, c, effectsOf(c.tribe)));
   redistributeFood(ctx.communities);
   for (const c of ctx.communities) {
-    const effects = techEffects(c.tribe.techs);
-    const production = productions.get(c) ?? { food: 0, wood: 0, stone: 0, copper: 0, farmed: 0, foraged: 0 };
+    const effects = effectsOf(c.tribe);
+    const production = productions.get(c);
     const consumption = consume(ctx, c, effects);
-    const ratio = Math.round(consumption.ratio * 1000) / 1000;
+    const ratio = round(consumption.ratio);
     if (c.settlement) c.settlement.lastFoodRatio = ratio;
     else c.tribe.lastFoodRatio = ratio;
-    c.tribe.lastFoodProduced = Math.round((c.tribe.lastFoodProduced + production.food) * 100) / 100;
-    c.tribe.lastFoodConsumed = Math.round((c.tribe.lastFoodConsumed + consumption.eaten) * 100) / 100;
-    if (c.settlement) {
+    c.tribe.lastFoodProduced = round(c.tribe.lastFoodProduced + (production?.food ?? 0), 2);
+    c.tribe.lastFoodConsumed = round(c.tribe.lastFoodConsumed + consumption.eaten, 2);
+    if (c.settlement && production) {
       c.settlement.lastProduction = {
-        food: production.food,
-        wood: production.wood,
-        stone: production.stone,
-        copper: production.copper,
+        food: round(production.food, 2),
+        wood: round(production.wood, 2),
+        stone: round(production.stone, 2),
+        copper: round(production.copper, 2),
+        goods: {
+          clay: round(production.clay, 2),
+          tin: round(production.tin, 2),
+          iron: round(production.iron, 2),
+          hides: round(production.hides, 2),
+          tools: round(production.tools, 2),
+        },
       };
       roundStock(c.settlement.lastProduction);
     }
@@ -261,11 +327,14 @@ export function runTick(ctx: SimContext) {
     c.members.push(...newborns);
   }
 
-  // 8-9. Ageing, natural deaths and starvation.
+  // 8. Ageing, natural deaths, starvation and epidemics.
   for (const c of ctx.communities) {
-    ageAndNaturalDeaths(ctx, c, techEffects(c.tribe.techs));
+    ageAndNaturalDeaths(ctx, c, effectsOf(c.tribe));
     starvationDeaths(ctx, c);
+    educateCommunity(c);
+    updatePrestige(c);
   }
+  updateEpidemics(ctx, ctx.communities);
 
   // Scarcity bookkeeping and famine events.
   for (const c of ctx.communities) {
@@ -282,7 +351,7 @@ export function runTick(ctx: SimContext) {
     c.members = c.members.filter((p) => p.alive);
   }
 
-  // 10. Migration, band splits and absorption of tiny groups.
+  // 9. Migration, band splits and absorption of tiny groups.
   const relationships = new Map(state.relationships.map((r) => [r.id, r]));
   for (const c of ctx.communities) {
     if (c.kind !== "band" || c.members.length === 0) continue;
@@ -294,7 +363,7 @@ export function runTick(ctx: SimContext) {
     joinNearbyGroup(ctx, tribe, members, relationships);
   }
 
-  // 11. Settlements: foundation, construction, colonies, collapse.
+  // 10. Settlements: foundation, construction, upkeep, colonies, collapse.
   for (const c of ctx.communities) {
     if (c.kind === "band" && c.tribe.status !== "extinct" && canFoundSettlement(ctx, c)) {
       const s = foundSettlement(ctx, c);
@@ -306,8 +375,9 @@ export function runTick(ctx: SimContext) {
   const friendly = friendlyTribes(ctx);
   for (const c of ctx.communities) {
     if (!c.settlement || c.settlement.status !== "active") continue;
-    const effects = techEffects(c.tribe.techs);
+    const effects = effectsOf(c.tribe);
     progressConstruction(ctx, c, effects, friendly.get(c.tribe.id) ?? new Set());
+    payUpkeep(ctx, c);
     trySpawnDaughter(ctx, c);
     trySecession(ctx, c);
     checkCollapse(ctx, c);
@@ -315,7 +385,7 @@ export function runTick(ctx: SimContext) {
   refreshSettlements(ctx);
   updateTerritory(ctx);
 
-  // 12. Technology.
+  // 11. Technology, research and adoption.
   buildCommunities(ctx);
   for (const tribe of tribesAlive(ctx)) {
     const comms = ctx.communities.filter((c) => c.tribe.id === tribe.id);
@@ -330,28 +400,152 @@ export function runTick(ctx: SimContext) {
       maxSettlementLevel: settlementsOwned.reduce((acc, c) => Math.max(acc, c.settlement?.level ?? 0), 0),
       maxHostility: rels.reduce((acc, r) => Math.max(acc, r.hostility), 0),
       conflictMemory: rels.reduce((acc, r) => Math.max(acc, r.conflictMemory), 0),
+      tradePartners: rels.filter((r) => r.tradeVolume > 10 && !r.atWar).length,
     });
   }
 
-  // 13. Relations: trade, knowledge, raids, wars, peace.
+  // 12. Culture, government and internal stability.
+  updateSociety(ctx);
+
+  // 13-14. Relations: trade, knowledge, raids, wars, peace.
   computeThreat(ctx);
   updateDiplomacy(ctx, buildProfiles(ctx));
 
-  // 14-15. Bookkeeping, extinction, civilizations, milestones.
+  // 15-16. Crises, bookkeeping, extinction, civilizations, milestones.
+  expireCrises(ctx);
   finalizeTick(ctx);
+}
+
+/** Step 12: culture drift, form of government, stability and internal unrest. */
+function updateSociety(ctx: SimContext) {
+  const { state } = ctx;
+  const config = state.config.society;
+  // Births of the year per tribe: one pass, then O(1) per tribe.
+  const birthsByTribe = new Map<string, number>();
+  for (const p of state.people) {
+    if (p.birthYear === state.year) birthsByTribe.set(p.tribeId, (birthsByTribe.get(p.tribeId) ?? 0) + 1);
+  }
+  for (const tribe of tribesAlive(ctx)) {
+    const comms = ctx.communities.filter((c) => c.tribe.id === tribe.id);
+    const members = comms.flatMap((c) => c.members);
+    if (members.length === 0) continue;
+    const settlementsOwned = comms.filter((c) => c.settlement);
+    const rels = state.relationships.filter((r) => r.aId === tribe.id || r.bId === tribe.id);
+    const atWar = rels.some((r) => r.atWar);
+    const foodRatio =
+      comms.reduce((acc, c) => acc + c.foodRatio * c.members.length, 0) / Math.max(1, members.length);
+    const capital = settlementsOwned.reduce<Community | null>(
+      (best, c) => (!best || (c.settlement?.population ?? 0) > (best.settlement?.population ?? 0) ? c : best),
+      null,
+    );
+    const spread = capital
+      ? settlementsOwned.reduce((acc, c) => acc + distance(c.x, c.y, capital.x, capital.y), 0) /
+        Math.max(1, settlementsOwned.length)
+      : 0;
+    const leader = tribe.leaderId ? ctx.people.get(tribe.leaderId) : undefined;
+    const neighbours = rels.filter((r) => r.distance <= 8);
+    const culturalStrain =
+      neighbours.length > 0
+        ? neighbours.reduce((acc, r) => acc + r.culturalDistance * (r.hostility > 0.4 ? 1 : 0.4), 0) /
+          neighbours.length
+        : 0;
+    const epidemic = state.crises.some(
+      (c) => c.kind === "epidemic" && settlementsOwned.some((s) => s.settlement?.id === c.targetId),
+    );
+
+    updateStability(
+      tribe,
+      {
+        population: members.length,
+        foodRatio,
+        atWar,
+        recentDefeat: rels.some((r) => r.lastConflictYear !== null && state.year - r.lastConflictYear <= 2),
+        leaderMissing: !leader?.alive,
+        leaderPrestige: leader?.alive ? leader.prestige : 0,
+        settlements: settlementsOwned.length,
+        spread,
+        epidemic,
+        // A group that grows too fast strains its own cohesion.
+        growthRate: clamp((birthsByTribe.get(tribe.id) ?? 0) / Math.max(1, members.length), 0, 1),
+        culturalStrain,
+      },
+      config.stabilityInertia,
+    );
+
+    const discovery = Object.keys(tribe.techProgress).length > 0 ? 0.6 : tribe.techs.length > 4 ? 0.4 : 0.2;
+    updateCulture(
+      tribe,
+      {
+        war: atWar ? 1 : rels.some((r) => r.hostility > 0.5) ? 0.5 : 0.1,
+        trade: clamp(rels.reduce((acc, r) => acc + r.tradeDependency, 0) / Math.max(1, rels.length)),
+        scarcity: clamp(1 - foodRatio),
+        discovery,
+        expansion: clamp(settlementsOwned.length / 4),
+        complexity: clamp(members.length / 400 + settlementsOwned.length / 6),
+      },
+      config.cultureDrift,
+    );
+
+    updateGovernment(
+      ctx,
+      tribe,
+      members.length,
+      settlementsOwned.reduce((acc, c) => Math.max(acc, c.settlement?.level ?? 0), 0),
+      settlementsOwned.length,
+    );
+    updateDistribution(tribe, atWar, clamp(1 - foodRatio));
+    updateLeaderStanding(ctx, tribe, foodRatio);
+
+    // Unrest turns into a revolt or a change at the top only after years of pressure.
+    if (tribe.stability.unrestYears >= config.unrestYearsBeforeRevolt) {
+      const worst = comms.reduce<Community | null>(
+        (best, c) => (!best || (c.settlement?.unrest ?? 0) > (best.settlement?.unrest ?? 0) ? c : best),
+        null,
+      );
+      if (worst && !tryRevolt(ctx, worst)) tryCoup(ctx, tribe, members);
+    }
+    // Local unrest tracks the group's tension plus what happens in each settlement.
+    for (const c of settlementsOwned) {
+      if (!c.settlement) continue;
+      const target = clamp(
+        tribe.stability.tension * 0.7 + (1 - c.foodRatio) * 0.4 - c.settlement.buildings.temple * 0.05,
+      );
+      c.settlement.unrest = round(clamp(c.settlement.unrest + (target - c.settlement.unrest) * 0.3));
+    }
+  }
+  // Cultural distance is recomputed once per year for every known pair.
+  for (const rel of state.relationships) {
+    const a = ctx.tribes.get(rel.aId);
+    const b = ctx.tribes.get(rel.bId);
+    if (a && b) rel.culturalDistance = culturalDistance(a.culture, b.culture);
+  }
 }
 
 function famineEvent(ctx: SimContext, c: Community) {
   const where = c.settlement ? c.settlement.name : describePlace(ctx.state, c.x, c.y);
+  const hazards = hazardsAt(ctx.state, c.x, c.y);
+  const causes: string[] = [];
+  if (hazards.some((h) => h.kind === "drought")) causes.push("la siccità");
+  if (ctx.state.climate.harshWinter) causes.push("l'inverno rigidissimo");
+  if (c.threat >= 1) causes.push("la guerra");
   emitEvent(ctx, {
     type: "famine",
+    subtype: hazards[0]?.kind ?? "shortage",
     importance: 3,
     actors: c.settlement ? [actor.settlement(c.settlement), actor.tribe(c.tribe)] : [actor.tribe(c.tribe)],
     x: c.x,
     y: c.y,
     title: `Carestia ${c.settlement ? `a ${c.settlement.name}` : `tra i ${c.tribe.name}`}`,
-    description: `Da due anni il cibo non basta presso ${where}: la tribù ${c.tribe.name} riesce a coprire solo il ${Math.round(c.foodRatio * 100)}% del fabbisogno.`,
-    metadata: { foodRatio: Math.round(c.foodRatio * 100) / 100, population: c.members.length },
+    description: `Da due anni il cibo non basta presso ${where}: la tribù ${c.tribe.name} riesce a coprire solo il ${Math.round(c.foodRatio * 100)}% del fabbisogno${causes.length ? `, complice ${causes.join(" e ")}` : ""}.`,
+    metadata: {
+      foodRatio: round(c.foodRatio, 2),
+      population: c.members.length,
+      stored: round(c.stock.food, 2),
+      climateModifier: ctx.state.climate.modifier,
+      harshWinter: ctx.state.climate.harshWinter,
+      hazards: hazards.map((h) => h.kind).join(","),
+    },
+    causeEventIds: hazards.map((h) => h.eventId).filter((id): id is string => Boolean(id)),
   });
 }
 
@@ -380,7 +574,7 @@ function refreshSettlements(ctx: SimContext) {
     }
     const tribe = ctx.tribes.get(s.tribeId);
     if (!tribe) continue;
-    updateSettlementStats(ctx, s, counts.get(s.id) ?? 0, tribe, techEffects(tribe.techs));
+    updateSettlementStats(ctx, s, counts.get(s.id) ?? 0, tribe, tribeEffects(tribe));
   }
 }
 
@@ -410,21 +604,31 @@ function finalizeTick(ctx: SimContext) {
       tribe.status = "extinct";
       tribe.extinctYear = state.year;
       tribe.leaderId = null;
+      for (const d of state.dynasties) {
+        if (d.tribeId === tribe.id && d.endedYear === null) d.endedYear = state.year;
+      }
       emitEvent(ctx, {
         type: "tribe_extinct",
+        subtype: "extinction",
         importance: 4,
         actors: [actor.tribe(tribe)],
         x: tribe.x,
         y: tribe.y,
         title: `Scompaiono i ${tribe.name}`,
         description: `Dell'antica tribù ${tribe.name} non resta più nessuno presso ${describePlace(state, tribe.x, tribe.y)}.`,
-        metadata: { foundedYear: tribe.foundedYear },
+        metadata: {
+          foundedYear: tribe.foundedYear,
+          years: state.year - tribe.foundedYear,
+          technologies: tribe.techs.length,
+        },
       });
       for (const rel of state.relationships) {
         if (rel.aId === tribe.id || rel.bId === tribe.id) {
           rel.atWar = false;
           rel.allied = false;
           rel.warStartYear = null;
+          rel.status = "unknown";
+          rel.phase = "peace";
         }
       }
       continue;
@@ -453,7 +657,7 @@ function finalizeTick(ctx: SimContext) {
     } else {
       tribe.status = "nomadic";
     }
-    tribe.morale = Math.round(clamp(tribe.morale + (0.7 - tribe.morale) * 0.1, 0.2, 1) * 1000) / 1000;
+    tribe.morale = round(clamp(tribe.morale + (0.7 - tribe.morale) * 0.1, 0.2, 1));
     ensureLeader(
       ctx,
       tribe,
@@ -489,22 +693,40 @@ export function collectStats(ctx: SimContext): TickStats {
   const { state, counters } = ctx;
   const techs = new Set<string>();
   let foodStored = 0;
+  let wealth = 0;
+  let storage = 0;
+  let stability = 0;
+  let aliveTribes = 0;
   for (const t of state.tribes) {
     if (t.status === "extinct") continue;
+    aliveTribes++;
     for (const id of t.techs) techs.add(id);
     foodStored += t.stock.food;
+    wealth += stockValue(t.stock);
+    stability +=
+      (t.stability.happiness + t.stability.cohesion + t.stability.legitimacy + t.stability.order) / 4;
   }
-  for (const s of state.settlements) if (s.status === "active") foodStored += s.stock.food;
+  let buildings = 0;
+  for (const s of state.settlements) {
+    if (s.status !== "active") continue;
+    foodStored += s.stock.food;
+    wealth += stockValue(s.stock);
+    for (const count of Object.values(s.buildings)) buildings += count;
+    storage += 30 + s.buildings.storehouse * 90 + s.buildings.kiln * 40;
+  }
+  const territory = state.cells.reduce((acc, c) => acc + (c.ownerTribeId ? 1 : 0), 0);
+  const needed = state.people.reduce((acc, p) => acc + foodNeed(p), 0);
+  const season = definingSeason(state);
   return {
     tick: state.tick,
     year: state.year,
     population: state.people.length,
-    tribes: state.tribes.filter((t) => t.status !== "extinct").length,
+    tribes: aliveTribes,
     settlements: state.settlements.filter((s) => s.status === "active").length,
     civilizations: state.civilizations.filter((c) => c.status === "active").length,
-    foodProduced: Math.round(counters.foodProduced * 10) / 10,
-    foodConsumed: Math.round(counters.foodConsumed * 10) / 10,
-    foodStored: Math.round(foodStored * 10) / 10,
+    foodProduced: round(counters.foodProduced, 1),
+    foodConsumed: round(counters.foodConsumed, 1),
+    foodStored: round(foodStored, 1),
     technologies: techs.size,
     wars: state.relationships.filter((r) => r.atWar).length,
     battles: counters.battles,
@@ -512,5 +734,70 @@ export function collectStats(ctx: SimContext): TickStats {
     deaths: counters.deaths,
     starvationDeaths: counters.starvationDeaths,
     conflictDeaths: counters.conflictDeaths,
+    epidemicDeaths: counters.epidemicDeaths,
+    foodSurplus: round(counters.foodProduced - needed, 1),
+    storageCapacity: round(storage, 1),
+    goodsProduced: round(counters.goodsProduced, 1),
+    tradeVolume: round(counters.tradeVolume, 1),
+    wealth: round(wealth, 1),
+    buildings,
+    territory,
+    averageTemperature: averageTemperature(state),
+    climateStress: climateStress(state),
+    averageStability: aliveTribes > 0 ? round(stability / aliveTribes, 3) : 0,
+    migrations: counters.migrations,
+    season,
   };
+}
+
+/** Per-civilization series, sampled at the configured interval. */
+export function collectCivilizationStats(ctx: SimContext): CivilizationStats[] {
+  const { state } = ctx;
+  const populations = new Map<string, number>();
+  for (const p of state.people) {
+    const tribe = ctx.tribes.get(p.tribeId);
+    if (tribe?.civilizationId)
+      populations.set(tribe.civilizationId, (populations.get(tribe.civilizationId) ?? 0) + 1);
+  }
+  return state.civilizations
+    .filter((c) => c.status === "active")
+    .map((civ) => {
+      const tribes = state.tribes.filter((t) => t.civilizationId === civ.id && t.status !== "extinct");
+      const settlements = state.settlements.filter(
+        (s) => s.status === "active" && s.civilizationId === civ.id,
+      );
+      const techs = new Set(tribes.flatMap((t) => t.techs));
+      const stability =
+        tribes.length > 0
+          ? tribes.reduce(
+              (acc, t) =>
+                acc +
+                (t.stability.happiness + t.stability.cohesion + t.stability.legitimacy + t.stability.order) /
+                  4,
+              0,
+            ) / tribes.length
+          : 0;
+      return {
+        tick: state.tick,
+        year: state.year,
+        civilizationId: civ.id,
+        population: populations.get(civ.id) ?? 0,
+        settlements: settlements.length,
+        technologies: techs.size,
+        foodStored: round(
+          settlements.reduce((acc, s) => acc + s.stock.food, 0),
+          1,
+        ),
+        wealth: round(
+          settlements.reduce((acc, s) => acc + stockValue(s.stock), 0),
+          1,
+        ),
+        territory: state.cells.filter((c) => c.ownerTribeId && tribes.some((t) => t.id === c.ownerTribeId))
+          .length,
+        stability: round(stability, 3),
+        atWar: state.relationships.some(
+          (r) => r.atWar && (tribes.some((t) => t.id === r.aId) || tribes.some((t) => t.id === r.bId)),
+        ),
+      };
+    });
 }

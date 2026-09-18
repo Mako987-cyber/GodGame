@@ -7,17 +7,12 @@ import { Tabs } from "@/components/ui/tabs";
 import type { WorldDetail } from "@/lib/dto";
 import { BIOME_LABELS } from "@/lib/client/format";
 import { BIOME_COLORS } from "@/lib/client/map-palette";
-import { useWorldUi, type Overlay } from "@/lib/client/store";
+import { OVERLAY_LABELS, useWorldUi, type Overlay } from "@/lib/client/store";
 import { drawMap, type View } from "./map-renderer";
 
-const OVERLAYS: { value: Overlay; label: string }[] = [
-  { value: "biome", label: "Biomi" },
-  { value: "fertility", label: "Fertilità" },
-  { value: "resources", label: "Risorse" },
-  { value: "population", label: "Popolazione" },
-  { value: "borders", label: "Confini" },
-  { value: "infrastructure", label: "Infrastrutture" },
-];
+const OVERLAYS: { value: Overlay; label: string }[] = (Object.keys(OVERLAY_LABELS) as Overlay[]).map(
+  (value) => ({ value, label: OVERLAY_LABELS[value] }),
+);
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
@@ -250,6 +245,7 @@ function MapLegend({ overlay }: { overlay: Overlay }) {
   }
   const ramps: Partial<Record<Overlay, [string, string, string, string]>> = {
     fertility: ["#3b3326", "#a8cf6c", "Terra sterile", "Molto fertile"],
+    water: ["#3a3228", "#5fa8d3", "Terra arida", "Acqua abbondante"],
     resources: ["#2c2a22", "#d6b25a", "Risorse esaurite", "Selvaggina e legname abbondanti"],
   };
   const r = ramps[overlay];
@@ -273,12 +269,32 @@ function MapLegend({ overlay }: { overlay: Overlay }) {
           <span className="flex items-center gap-1.5">
             <span className="size-2.5 rounded-full bg-[#b8bcc2]" /> Ferro
           </span>
+          <span className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full bg-[#9fd3c7]" /> Stagno
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full bg-[#4d4d55]" /> Carbone
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="size-2.5 rounded-full bg-[#c98f6b]" /> Argilla
+          </span>
         </>
       )}
       {overlay === "population" && <span>Aloni più grandi e luminosi indicano più abitanti.</span>}
       {overlay === "borders" && <span>Ogni colore è il territorio di una tribù.</span>}
+      {overlay === "culture" && <span>La tinta indica la tribù che esercita influenza sulla cella.</span>}
+      {overlay === "trade" && (
+        <span>Linee tratteggiate azzurre: rotte commerciali attive, più spesse se più intense.</span>
+      )}
+      {overlay === "conflicts" && (
+        <span>
+          Linee rosse: guerre in corso; arancioni: forte ostilità. I cerchi segnalano le crisi attive.
+        </span>
+      )}
       {overlay === "infrastructure" && (
-        <span>Righe gialle: campi coltivati. Linee chiare: strade. Cornice: palizzata.</span>
+        <span>
+          Righe gialle: campi. Punti verdi: pascoli. Linee chiare: strade. Cornice: palizzata o mura.
+        </span>
       )}
       <ul className="flex gap-4">
         <MarkerLegend />

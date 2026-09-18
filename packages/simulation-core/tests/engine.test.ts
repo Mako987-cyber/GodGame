@@ -1,59 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkInvariants,
   cloneWorld,
   createWorld,
   deserializeWorld,
   hashWorld,
-  inBounds,
   runSimulation,
   serializeWorld,
   type HistoricalEvent,
   type WorldState,
 } from "../src/index";
 
-function assertInvariants(state: WorldState, events: HistoricalEvent[], everIds: Set<string>) {
-  const tribes = new Map(state.tribes.map((t) => [t.id, t]));
-  const settlements = new Map(state.settlements.map((s) => [s.id, s]));
-  expect(state.people.length).toBeGreaterThanOrEqual(0);
-  for (const cell of state.cells) {
-    for (const v of [cell.fauna, cell.wood, cell.fertility, cell.stone, cell.copper, cell.habitability]) {
-      expect(Number.isFinite(v)).toBe(true);
-      expect(v).toBeGreaterThanOrEqual(0);
-    }
-  }
-  for (const holder of [...state.tribes.map((t) => t.stock), ...state.settlements.map((s) => s.stock)]) {
-    for (const v of Object.values(holder)) {
-      expect(Number.isFinite(v)).toBe(true);
-      expect(v).toBeGreaterThanOrEqual(0);
-    }
-  }
-  for (const p of state.people) {
-    expect(p.alive).toBe(true);
-    expect(inBounds(state, p.x, p.y)).toBe(true);
-    const tribe = tribes.get(p.tribeId);
-    expect(tribe, `tribe of ${p.id}`).toBeDefined();
-    expect(tribe?.status).not.toBe("extinct");
-    if (p.settlementId) {
-      const s = settlements.get(p.settlementId);
-      expect(s?.status).toBe("active");
-      expect(s?.tribeId).toBe(p.tribeId);
-    }
-    expect(Number.isFinite(p.health)).toBe(true);
-  }
-  // Dead people never act again: they are archived with a death year and cause.
-  for (const p of state.archive.people) {
-    expect(p.alive).toBe(false);
-    expect(p.deathYear).not.toBeNull();
-    expect(p.deathCause).not.toBeNull();
-    expect(state.people.some((q) => q.id === p.id)).toBe(false);
-  }
-  for (const t of state.tribes) expect(inBounds(state, t.x, t.y)).toBe(true);
-  for (const s of state.settlements) expect(inBounds(state, s.x, s.y)).toBe(true);
-  for (const e of events) {
-    if (e.x !== null && e.y !== null) expect(inBounds(state, e.x, e.y)).toBe(true);
-    for (const a of e.actors)
-      expect(everIds.has(a.id), `event ${e.type} references ${a.kind} ${a.id}`).toBe(true);
-  }
+function everIds(state: WorldState): Set<string> {
+  return new Set<string>([
+    ...state.people.map((p) => p.id),
+    ...state.archive.people.map((p) => p.id),
+    ...state.tribes.map((t) => t.id),
+    ...state.settlements.map((s) => s.id),
+    ...state.civilizations.map((c) => c.id),
+    ...state.dynasties.map((d) => d.id),
+  ]);
 }
 
 describe("motore di simulazione", () => {
@@ -70,15 +36,9 @@ describe("motore di simulazione", () => {
         expect(s.population).toBeGreaterThanOrEqual(0);
         expect(Number.isFinite(s.foodProduced)).toBe(true);
         expect(Number.isFinite(s.foodStored)).toBe(true);
+        expect(Number.isFinite(s.wealth)).toBe(true);
       }
-      const everIds = new Set<string>([
-        ...state.people.map((p) => p.id),
-        ...state.archive.people.map((p) => p.id),
-        ...state.tribes.map((t) => t.id),
-        ...state.settlements.map((s) => s.id),
-        ...state.civilizations.map((c) => c.id),
-      ]);
-      assertInvariants(state, all, everIds);
+      expect(checkInvariants(state, { events: all, knownIds: everIds(state) })).toEqual([]);
       if (state.people.length !== initialPopulation) changedPopulation = true;
     }
     expect(state.tick).toBe(100);
@@ -95,6 +55,7 @@ describe("motore di simulazione", () => {
     expect(hashWorld(a)).toBe(hashWorld(b));
     expect(ra.events).toEqual(rb.events);
     expect(ra.stats).toEqual(rb.stats);
+    expect(ra.civStats).toEqual(rb.civStats);
   });
 
   it("un batch da 60 equivale a batch più piccoli con salvataggio intermedio", () => {
@@ -119,5 +80,21 @@ describe("motore di simulazione", () => {
     expect(result.partial).toBe(true);
     expect(result.ticksRun).toBeLessThan(50);
     expect(state.tick).toBe(result.ticksRun);
+  });
+
+  it("la pipeline produce metriche coerenti ogni tick", () => {
+    const state = createWorld({ seed: "metriche" });
+    const result = runSimulation(state, 40);
+    expect(result.stats).toHaveLength(40);
+    for (const s of result.stats) {
+      expect(["spring", "summer", "autumn", "winter"]).toContain(s.season);
+      expect(s.averageTemperature).toBeGreaterThanOrEqual(0);
+      expect(s.averageTemperature).toBeLessThanOrEqual(1);
+      expect(s.climateStress).toBeGreaterThanOrEqual(0);
+      expect(s.territory).toBeGreaterThanOrEqual(0);
+      expect(s.deaths).toBeGreaterThanOrEqual(
+        s.starvationDeaths + s.conflictDeaths + s.epidemicDeaths - s.deaths,
+      );
+    }
   });
 });

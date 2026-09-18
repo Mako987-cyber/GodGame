@@ -5,13 +5,14 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import type { WorldDetail } from "@/lib/dto";
-import { fmtInt, STATUS_LABELS } from "@/lib/client/format";
+import { fmtInt, STATUS_LABELS, TIER_LABELS, TITLE_LABELS } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
 import { CellPanel } from "./cell-panel";
 import { CivilizationPanel, TribePanel } from "./civilization-panel";
+import { PersonPanel } from "./person-panel";
 import { SettlementPanel } from "./settlement-panel";
 
-type ListTab = "tribes" | "settlements" | "civilizations";
+type ListTab = "tribes" | "settlements" | "civilizations" | "people";
 
 export function WorldSidebar({ detail }: { detail: WorldDetail }) {
   const { selection, select } = useWorldUi();
@@ -31,6 +32,7 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
     const c = detail.civilizations.find((x) => x.id === selection.id);
     if (c) content = <CivilizationPanel civ={c} detail={detail} />;
   }
+  if (selection?.kind === "person") content = <PersonPanel personId={selection.id} detail={detail} />;
 
   if (content) {
     return (
@@ -60,6 +62,11 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
       <p className="text-muted text-sm">
         Seleziona una cella, un villaggio o una tribù sulla mappa, oppure scegli dagli elenchi.
       </p>
+      {detail.crises.length > 0 && (
+        <p className="text-war text-sm">
+          Crisi in corso: {detail.crises.length}. Usa il livello «Conflitti» della mappa per vederle.
+        </p>
+      )}
       <Tabs
         label="Elenchi"
         value={tab}
@@ -74,6 +81,7 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
             value: "civilizations",
             label: `Civiltà (${detail.civilizations.filter((c) => c.status === "active").length})`,
           },
+          { value: "people", label: `Figure (${detail.notablePeople.length})` },
         ]}
       />
       <ul className="grid gap-0.5">
@@ -101,9 +109,25 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
                 name={s.name}
                 meta={
                   s.status === "active"
-                    ? `livello ${s.level}, ${fmtInt(s.population)} abitanti`
+                    ? `${TIER_LABELS[s.tier] ?? `livello ${s.level}`}, ${fmtInt(s.population)} abitanti`
                     : "abbandonato"
                 }
+              />
+            ))
+          ))}
+        {tab === "people" &&
+          (detail.notablePeople.length === 0 ? (
+            <li className="text-muted text-sm">
+              Nessuna figura di rilievo: guide, fondatori e inventori compaiono qui.
+            </li>
+          ) : (
+            detail.notablePeople.map((p) => (
+              <Row
+                key={p.id}
+                color={detail.tribes.find((t) => t.id === p.tribeId)?.color}
+                onClick={() => select({ kind: "person", id: p.id })}
+                name={p.name}
+                meta={`${p.title ? `${TITLE_LABELS[p.title] ?? p.title}, ` : ""}${p.age} anni`}
               />
             ))
           ))}

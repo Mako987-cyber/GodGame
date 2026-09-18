@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db";
 import { listRunningWorldIds } from "@/lib/db/queries";
 import { simulateWorldService } from "@/lib/services/world-service";
+import { cronConfig } from "@/lib/config";
 import { errorResponse, ok } from "@/lib/utils/api";
 import { AppError } from "@/lib/utils/errors";
 import { errorDetails, logger } from "@/lib/utils/logger";
@@ -9,31 +10,45 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const WORLDS_PER_RUN = 3;
-const TICKS_PER_WORLD = 10;
-
 /**
  * OPTIONAL: advances worlds marked "running". Disabled unless CRON_SECRET is set;
- * the MVP works entirely through explicit calls from the UI.
+ * the app works entirely through explicit calls from the UI.
+ *
+ * Every invocation takes a bounded slice of work — at most `worldsPerRun` worlds,
+ * `ticksPerWorld` years each — so a single execution always terminates well inside the
+ * serverless budget. Archived worlds are never touched, concurrent runs are kept apart by
+ * the per-world lock, and a failure on one world does not stop the others.
  */
 export async function GET(request: Request) {
+  const started = Date.now();
   try {
-    const secret = process.env.CRON_SECRET;
-    if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
+    const config = cronConfig();
+    if (!config.secret || request.headers.get("authorization") !== `Bearer ${config.secret}`) {
       throw new AppError("UNAUTHORIZED", "Cron non autorizzato o non configurato");
     }
     const db = await getDb();
-    const ids = await listRunningWorldIds(db, WORLDS_PER_RUN);
+    const ids = await listRunningWorldIds(db, config.worldsPerRun);
     const results: { worldId: string; ok: boolean; ticks?: number; error?: string }[] = [];
     for (const worldId of ids) {
+      // Stop early rather than being killed mid-write by the platform timeout.
+      if (Date.now() - started > config.budgetMs) {
+        logger.warn("cron.budget_exhausted", { processed: results.length, pending: ids.length });
+        break;
+      }
       try {
-        const r = await simulateWorldService(worldId, TICKS_PER_WORLD);
+        const r = await simulateWorldService(worldId, config.ticksPerWorld);
         results.push({ worldId, ok: true, ticks: r.ticksRun });
       } catch (error) {
         logger.warn("cron.world_failed", { worldId, ...errorDetails(error) });
         results.push({ worldId, ok: false, error: error instanceof Error ? error.message : String(error) });
       }
     }
+    logger.info("cron.advance", {
+      candidates: ids.length,
+      advanced: results.filter((r) => r.ok).length,
+      failed: results.filter((r) => !r.ok).length,
+      durationMs: Date.now() - started,
+    });
     return ok({ advanced: results });
   } catch (error) {
     return errorResponse(error);
