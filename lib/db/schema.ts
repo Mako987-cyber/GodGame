@@ -24,11 +24,13 @@ import type {
   EventActor,
   GoodsBag,
   GovernmentType,
+  IdentityType,
   JsonValue,
   Personality,
   SimulationConfig,
   Skills,
   Stability,
+  WorldRoster,
   WorldSettings,
 } from "@genesis/simulation-core";
 
@@ -72,6 +74,12 @@ export const worlds = pgTable(
     simulationVersion: integer("simulation_version").notNull().default(1),
     config: jsonb("config").$type<SimulationConfig | Record<string, never>>().notNull().default({}),
     crises: jsonb("crises").$type<ActiveCrisis[]>().notNull().default([]),
+    /**
+     * Founding roster of a historical world, written once by `insertWorld` and never updated:
+     * reloading or refreshing a world can never re-roll its peoples. `null` for procedural and
+     * legacy worlds.
+     */
+    roster: jsonb("roster").$type<WorldRoster | null>(),
     /** Reserved for future authentication. */
     ownerId: text("owner_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -154,8 +162,23 @@ export const tribes = pgTable(
     distribution: text("distribution").$type<DistributionPolicy>(),
     dynastyId: text("dynasty_id"),
     lastLeaderChangeYear: integer("last_leader_change_year"),
+    /**
+     * Catalog key of the historical identity. Not unique per world on purpose: a people can
+     * split into several polities sharing one identity (uniqueness is enforced on the founding
+     * roster, continuity by `parent_tribe_id`).
+     */
+    identityId: text("identity_id"),
+    /** Rows written before identities existed default to `legacy` and are never reassigned. */
+    identityType: text("identity_type").$type<IdentityType>().notNull().default("legacy"),
+    absorbedIdentityIds: jsonb("absorbed_identity_ids").$type<string[]>().notNull().default([]),
+    absorbedByTribeId: text("absorbed_by_tribe_id"),
   },
-  (t) => [primaryKey({ columns: [t.worldId, t.id] }), index("tribes_world_seq_idx").on(t.worldId, t.seq)],
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("tribes_world_seq_idx").on(t.worldId, t.seq),
+    index("tribes_world_identity_idx").on(t.worldId, t.identityId),
+    index("tribes_world_status_idx").on(t.worldId, t.status),
+  ],
 );
 
 export const households = pgTable(
@@ -286,8 +309,16 @@ export const civilizations = pgTable(
     capitalSettlementId: text("capital_settlement_id"),
     foundedYear: integer("founded_year").notNull(),
     status: text("status", { enum: ["active", "collapsed"] }).notNull(),
+    identityId: text("identity_id"),
+    identityType: text("identity_type").$type<IdentityType>().notNull().default("legacy"),
+    politicalStem: text("political_stem"),
+    formerNames: jsonb("former_names").$type<string[]>().notNull().default([]),
   },
-  (t) => [primaryKey({ columns: [t.worldId, t.id] })],
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("civilizations_world_identity_idx").on(t.worldId, t.identityId),
+    index("civilizations_world_status_idx").on(t.worldId, t.status),
+  ],
 );
 
 /** Global catalog, seeded from the simulation core definitions. */
@@ -499,6 +530,8 @@ export const simulationRuns = pgTable(
 );
 
 export type WorldRow = typeof worlds.$inferSelect;
+export type TribeRow = typeof tribes.$inferSelect;
+export type CivilizationRow = typeof civilizations.$inferSelect;
 export type DynastyRow = typeof dynasties.$inferSelect;
 export type CivilizationStatsRow = typeof civilizationStats.$inferSelect;
 export type EventRow = typeof historicalEvents.$inferSelect;

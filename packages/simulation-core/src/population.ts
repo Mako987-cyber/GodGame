@@ -1,4 +1,5 @@
 import { createPerson } from "./agents";
+import { namingFor } from "./identity/catalog";
 import { winterMortalityFactor } from "./climate";
 import { AGE, MORTALITY } from "./constants";
 import type { Community, SimContext } from "./context";
@@ -308,6 +309,8 @@ export function births(
       mother,
       father,
       householdId: mother.householdId,
+      naming: namingFor(community.tribe),
+      nameSeed: `${ctx.state.seed}:${id}`,
     });
     child.birthSettlementId = mother.settlementId;
     child.dynastyId = father.dynastyId ?? mother.dynastyId;

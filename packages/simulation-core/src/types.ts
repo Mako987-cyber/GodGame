@@ -1,4 +1,6 @@
 import type { DistributionPolicy, Season, SimulationConfig } from "./config";
+import type { IdentityType } from "./identity/definition";
+import type { WorldRoster } from "./identity/roster";
 import type { RngState } from "./prng";
 import type { GoodsBag, ResourceBundle, Stockpile } from "./stock";
 
@@ -158,7 +160,7 @@ export interface Person {
 
 export type TribeStatus = "nomadic" | "settled" | "extinct";
 
-/** Culture traits, each normalized 0..100. Procedurally generated: never modelled on real peoples. */
+/** Culture traits, each normalized 0..100. Procedurally generated; a historical identity may only nudge the starting values (see `applyIdentityModifiers`). */
 export interface CultureTraits {
   cooperation: number;
   militarism: number;
@@ -219,6 +221,17 @@ export interface Tribe {
   distribution: DistributionPolicy;
   dynastyId: string | null;
   lastLeaderChangeYear: number | null;
+  /**
+   * Historical identity (catalog key) this political instance carries. Shared by the
+   * successors born from it (splits, secessions): one cultural identity, several polities.
+   * `null` for procedural and legacy tribes.
+   */
+  identityId: string | null;
+  identityType: IdentityType;
+  /** Identities of peoples this group absorbed (by merger or conquest): kept, never erased. */
+  absorbedIdentityIds: string[];
+  /** Set when the tribe ended by merging into another one rather than by dying out. */
+  absorbedByTribeId: string | null;
 }
 
 export interface Dynasty {
@@ -320,6 +333,13 @@ export interface Civilization {
   capitalSettlementId: string | null;
   foundedYear: number;
   status: "active" | "collapsed";
+  /** Inherited from the founder tribe: a state is a political form of a people, not a new people. */
+  identityId: string | null;
+  identityType: IdentityType;
+  /** Place the political name is built on ("Naru" in "Regno di Naru"); null for legacy names. */
+  politicalStem: string | null;
+  /** Previous political names, oldest first: the state changed form, it was not replaced. */
+  formerNames: string[];
 }
 
 export interface Household {
@@ -389,7 +409,8 @@ export type EventType =
   | "leadership"
   | "unrest"
   | "culture"
-  | "settlement_growth";
+  | "settlement_growth"
+  | "civilization_transformed";
 
 export type ActorKind = "tribe" | "settlement" | "civilization" | "person" | "dynasty";
 
@@ -579,6 +600,8 @@ export interface WorldState {
   dynasties: Dynasty[];
   crises: ActiveCrisis[];
   archive: Archive;
+  /** Founding roster of a historical world; `null` for procedural and legacy worlds. Never regenerated. */
+  roster: WorldRoster | null;
 }
 
 export interface SimulationResult {

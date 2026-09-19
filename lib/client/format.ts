@@ -46,6 +46,7 @@ export const EVENT_LABELS: Record<string, string> = {
   unrest: "Tensioni interne",
   culture: "Cultura",
   settlement_growth: "Crescita urbana",
+  civilization_transformed: "Trasformazione politica",
 };
 
 export const IMPORTANCE_LABELS: Record<number, string> = {
@@ -236,7 +237,8 @@ export function eventTone(type: string): "war" | "growth" | "ochre" | "water" | 
     ].includes(type)
   )
     return "growth";
-  if (["tech_discovered", "construction", "leadership", "culture"].includes(type)) return "ochre";
+  if (["tech_discovered", "construction", "leadership", "culture", "civilization_transformed"].includes(type))
+    return "ochre";
   if (["trade", "peace", "alliance", "migration", "climate"].includes(type)) return "water";
   return "neutral";
 }

@@ -132,6 +132,7 @@ export async function insertWorld(
         simulationVersion: state.simulationVersion,
         config: state.config,
         crises: state.crises,
+        roster: state.roster,
       })
       .returning();
     await bulkInsert(
@@ -155,6 +156,18 @@ export async function insertWorld(
         s.households,
         state.households.map((h) => m.householdToRow(worldId, h)),
       );
+    // The common starting technology is recorded as such, not as a discovery.
+    const startingTechs = state.tribes.flatMap((t) =>
+      t.techs.map((techId) => ({
+        worldId,
+        tribeId: t.id,
+        techId,
+        discoveredYear: state.year,
+        discoveredTick: state.tick,
+        method: "starting",
+      })),
+    );
+    for (const part of chunk(startingTechs)) await tx.insert(s.worldTechnologies).values(part);
     await tx.insert(s.worldStats).values(m.statsToRow(worldId, collectStats(createContext(state))));
     await tx.insert(s.worldSnapshots).values({
       worldId,
@@ -251,6 +264,7 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       dynasties: dynasties.map(m.dynastyFromRow),
       crises: row.crises ?? [],
       archive: { people: [], households: [] },
+      roster: row.roster ?? null,
     }),
   );
   return { row, state, cellSignatures: state.cells.map(m.cellSignature) };
@@ -536,6 +550,7 @@ export async function getWorldEntities(db: Database, worldId: string) {
         role: s.people.role,
         title: s.people.title,
         prestige: s.people.prestige,
+        sex: s.people.sex,
       })
       .from(s.people)
       .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true), eq(s.people.notable, true))),
@@ -692,4 +707,82 @@ export async function listRunningWorldIds(db: Database, limit: number): Promise<
     .orderBy(asc(s.worlds.updatedAt))
     .limit(limit);
   return rows.map((r) => r.id);
+}
+
+/**
+ * Everything the civilization endpoints need, in 5 parallel queries whatever the number of
+ * peoples (no N+1): tribes, states, head counts, current leaders and the world row.
+ */
+export async function getPoliticalInstances(db: Database, worldId: string) {
+  const [row, tribes, civilizations, populations, leaders] = await Promise.all([
+    getWorldRow(db, worldId),
+    db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
+    db
+      .select()
+      .from(s.civilizations)
+      .where(eq(s.civilizations.worldId, worldId))
+      .orderBy(asc(s.civilizations.seq)),
+    db
+      .select({ tribeId: s.people.tribeId, population: count() })
+      .from(s.people)
+      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
+      .groupBy(s.people.tribeId),
+    db
+      .select({
+        id: s.people.id,
+        name: s.people.name,
+        age: s.people.age,
+        sex: s.people.sex,
+        tribeId: s.people.tribeId,
+      })
+      .from(s.people)
+      .innerJoin(s.tribes, and(eq(s.tribes.worldId, s.people.worldId), eq(s.tribes.leaderId, s.people.id)))
+      .where(eq(s.people.worldId, worldId)),
+  ]);
+  return { row, tribes, civilizations, populations, leaders };
+}
+
+/** Founding facts of one people: its first settlement and its technologies, in discovery order. */
+export async function getCivilizationFacts(db: Database, worldId: string, tribeId: string) {
+  const [firstSettlement, discoveries, leaders] = await Promise.all([
+    db
+      .select({
+        title: s.historicalEvents.title,
+        year: s.historicalEvents.year,
+        actors: s.historicalEvents.actors,
+      })
+      .from(s.historicalEvents)
+      .where(
+        and(
+          eq(s.historicalEvents.worldId, worldId),
+          eq(s.historicalEvents.type, "settlement_founded"),
+          sql`${s.historicalEvents.actors} @> ${JSON.stringify([{ id: tribeId }])}::jsonb`,
+        ),
+      )
+      .orderBy(asc(s.historicalEvents.seq))
+      .limit(1),
+    db
+      .select()
+      .from(s.worldTechnologies)
+      .where(and(eq(s.worldTechnologies.worldId, worldId), eq(s.worldTechnologies.tribeId, tribeId)))
+      .orderBy(asc(s.worldTechnologies.discoveredTick)),
+    db
+      .select({
+        id: s.historicalEvents.id,
+        year: s.historicalEvents.year,
+        title: s.historicalEvents.title,
+        subtype: s.historicalEvents.subtype,
+      })
+      .from(s.historicalEvents)
+      .where(
+        and(
+          eq(s.historicalEvents.worldId, worldId),
+          eq(s.historicalEvents.type, "leadership"),
+          sql`${s.historicalEvents.actors} @> ${JSON.stringify([{ id: tribeId }])}::jsonb`,
+        ),
+      )
+      .orderBy(asc(s.historicalEvents.seq))
+      .limit(50),
+  ]);
+  return { firstSettlement: firstSettlement[0] ?? null, discoveries, leaders };
 }

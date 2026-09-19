@@ -1,6 +1,8 @@
 import { AGE } from "./constants";
 import type { Community } from "./context";
 import { clamp, round } from "./grid";
+import type { NamingProfile } from "./identity/definition";
+import { identityPersonName } from "./identity/naming";
 import { personName } from "./names";
 import type { Rng } from "./prng";
 import type { Action, Person, Personality, Role, Sex, Skills } from "./types";
@@ -19,6 +21,12 @@ export interface NewPersonInput {
   mother?: Person | null;
   father?: Person | null;
   householdId?: string | null;
+  /**
+   * Naming profile of the person's historical identity. Identity names come from a stream
+   * derived from `nameSeed`, so they never consume the simulation RNG.
+   */
+  naming?: NamingProfile | null;
+  nameSeed?: string;
 }
 
 function inheritTrait(rng: Rng, a: number | undefined, b: number | undefined): number {
@@ -50,7 +58,9 @@ export function createPerson(rng: Rng, input: NewPersonInput): Person {
   return {
     id: input.id,
     seq: input.seq,
-    name: personName(rng),
+    name: input.naming
+      ? identityPersonName(input.naming, input.nameSeed ?? input.id, input.sex)
+      : personName(rng),
     tribeId: input.tribeId,
     settlementId: input.settlementId,
     householdId: input.householdId ?? null,

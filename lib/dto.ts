@@ -6,7 +6,10 @@ import type {
   DistributionPolicy,
   EventActor,
   GovernmentType,
+  IdentityType,
   JsonValue,
+  RosterEntry,
+  RosterMode,
   Season,
   SeasonState,
   SettlementTier,
@@ -15,6 +18,16 @@ import type {
   WorldSettings,
 } from "@genesis/simulation-core";
 import type { WorldSummary } from "@/lib/db/schema";
+import type { IdentitySummaryDTO } from "@/lib/validation/identity";
+
+export type {
+  IdentityDetailDTO,
+  IdentityPageDTO,
+  IdentitySummaryDTO,
+  WorldCivilizationDetailDTO,
+  WorldCivilizationDTO,
+  WorldCivilizationListDTO,
+} from "@/lib/validation/identity";
 
 /** Shapes returned by the API and consumed by the UI (kept free of server-only imports). */
 export interface WorldListItem {
@@ -76,7 +89,8 @@ export interface TribeDTO {
   techs: string[];
   techProgress: Record<string, number>;
   civilizationId: string | null;
-  leader: { id: string; name: string; age: number } | null;
+  /** Title follows the government the simulation produced, never the identity's fame. */
+  leader: { id: string; name: string; age: number; title: string } | null;
   foundedYear: number;
   extinctYear: number | null;
   morale: number;
@@ -90,6 +104,11 @@ export interface TribeDTO {
   stability: Stability;
   distribution: DistributionPolicy;
   dynasty: { id: string; name: string; rulers: number; prestige: number } | null;
+  identityId: string | null;
+  identityType: IdentityType;
+  emblemKey: string | null;
+  absorbedIdentityIds: string[];
+  absorbedByTribeId: string | null;
 }
 
 export interface SettlementDTO {
@@ -138,6 +157,27 @@ export interface CivilizationDTO {
   tribeIds: string[];
   settlementIds: string[];
   population: number;
+  identityId: string | null;
+  identityType: IdentityType;
+  /** Earlier political names of the same state, oldest first. */
+  formerNames: string[];
+}
+
+/** Founding roster of a historical world, as stored at creation. */
+export interface RosterDTO {
+  mode: RosterMode;
+  catalogVersion: string;
+  enableIdentityModifiers: boolean;
+  balancedPlacement: boolean;
+  equalStartingLevel: boolean;
+  entries: RosterEntry[];
+}
+
+export interface CivilizationHistoryDTO {
+  civilizationId: string;
+  discoveries: { techId: string; year: number; method: string }[];
+  leadership: { id: string; year: number; title: string; subtype: string | null }[];
+  events: EventsPage;
 }
 
 export interface RelationshipDTO {
@@ -266,6 +306,9 @@ export interface WorldDetail {
     prestige: number;
   }[];
   lastSnapshot: { tick: number; year: number } | null;
+  roster: RosterDTO | null;
+  /** Summaries of the identities used in this world only. */
+  identities: IdentitySummaryDTO[];
 }
 
 export interface EventDTO {

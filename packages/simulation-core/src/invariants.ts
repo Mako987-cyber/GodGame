@@ -1,6 +1,7 @@
 import { RESOURCES, getResourceAmount } from "./stock";
 import { TECH_BY_ID } from "./technology";
 import { inBounds } from "./grid";
+import { checkIdentityLineage } from "./identity/lineage";
 import type { HistoricalEvent, WorldState } from "./types";
 
 /**
@@ -212,6 +213,9 @@ export function checkInvariants(state: WorldState, options: InvariantOptions = {
     if (rel.atWar !== (rel.status === "war")) add(`relazione ${rel.id}: stato e flag di guerra incoerenti`);
     if (rel.atWar && rel.allied) add(`relazione ${rel.id}: alleata e in guerra contemporaneamente`);
   }
+
+  // --- Historical identities ----------------------------------------------
+  for (const problem of checkIdentityLineage(state)) add(problem);
 
   // --- Civilizations and dynasties ----------------------------------------
   for (const civ of state.civilizations) {

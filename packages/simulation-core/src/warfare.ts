@@ -5,6 +5,7 @@ import { cellAt, clamp, round } from "./grid";
 import { killPerson } from "./population";
 import type { Rng } from "./prng";
 import { addResource, consumeResource, getResourceAmount, RESOURCES } from "./stock";
+import { recordAbsorbedIdentity } from "./identity/lineage";
 import { grantTech, tribeEffects } from "./technology";
 import type { Person, Relationship, Tribe } from "./types";
 
@@ -285,6 +286,8 @@ function occupySettlement(ctx: SimContext, attacker: Tribe, defender: Tribe, tar
   for (const cell of ctx.state.cells) {
     if (cell.settlementId === s.id) cell.ownerTribeId = attacker.id;
   }
+  // Survivors bring their identity with them: it lives on under the conqueror.
+  recordAbsorbedIdentity(attacker, defender);
   attacker.stability.legitimacy = clamp(attacker.stability.legitimacy + 0.08);
   defender.stability.legitimacy = clamp(defender.stability.legitimacy - 0.15);
   defender.stability.tension = clamp(defender.stability.tension + 0.15);
@@ -302,6 +305,7 @@ function occupySettlement(ctx: SimContext, attacker: Tribe, defender: Tribe, tar
       settlementId: s.id,
       previousTribeId: defender.id,
       newTribeId: attacker.id,
+      conqueredIdentityId: defender.identityId,
       survivors: survivors.length,
       level: s.level,
       tier: s.tier,

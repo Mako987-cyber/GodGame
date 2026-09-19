@@ -1,6 +1,11 @@
+import type { CivilizationRosterConfigInput } from "@genesis/simulation-core";
 import type {
   ApiErrorBody,
+  CivilizationHistoryDTO,
   EventsPage,
+  IdentityDetailDTO,
+  IdentityPageDTO,
+  WorldCivilizationDetailDTO,
   PersonDTO,
   SimulateResponse,
   StatsResponse,
@@ -56,7 +61,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listWorlds: () => request<WorldListItem[]>("/api/worlds"),
-  createWorld: (input: { name: string; seed?: string; width?: number; height?: number }) =>
+  createWorld: (input: {
+    name: string;
+    seed?: string;
+    width?: number;
+    height?: number;
+    roster?: CivilizationRosterConfigInput;
+  }) =>
     request<{ worldId: string; world: WorldListItem }>("/api/worlds", {
       method: "POST",
       body: JSON.stringify(input),
@@ -87,6 +98,15 @@ export const api = {
       `/api/worlds/${id}/stats?maxPoints=400${options.civilizations ? "&civilizations=true" : ""}`,
     ),
   person: (id: string, personId: string) => request<PersonDTO>(`/api/worlds/${id}/people/${personId}`),
+  /** Catalog summaries; fetched only when the player opens the identity picker. */
+  identities: () => request<IdentityPageDTO>("/api/historical-identities?pageSize=50"),
+  identity: (key: string) => request<IdentityDetailDTO>(`/api/historical-identities/${key}`),
+  civilization: (id: string, civId: string) =>
+    request<WorldCivilizationDetailDTO>(`/api/worlds/${id}/civilizations/${civId}`),
+  civilizationHistory: (id: string, civId: string, page = 1) =>
+    request<CivilizationHistoryDTO>(
+      `/api/worlds/${id}/civilizations/${civId}/history?page=${page}&pageSize=20`,
+    ),
 };
 
 export const queryKeys = {
@@ -95,4 +115,7 @@ export const queryKeys = {
   events: (id: string) => ["events", id] as const,
   stats: (id: string) => ["stats", id] as const,
   person: (id: string, personId: string) => ["person", id, personId] as const,
+  identities: ["identities"] as const,
+  identity: (key: string) => ["identity", key] as const,
+  civilization: (id: string, civId: string) => ["civilization", id, civId] as const,
 };

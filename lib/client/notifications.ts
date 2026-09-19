@@ -24,6 +24,7 @@ export const NOTIFICATION_LABELS: Record<NotificationCategory, string> = {
 const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   settlement_founded: "founding",
   civilization_founded: "founding",
+  civilization_transformed: "founding",
   tech_discovered: "discovery",
   famine: "famine",
   conflict: "war",

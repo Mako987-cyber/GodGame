@@ -32,7 +32,7 @@ prodotto, e l'interfaccia li mostra nel pannello «Perché è successo?».
 8. [Architettura](#architettura) · [Schermata del mondo](#schermata-del-mondo) ·
    [Mappa esagonale](#mappa-esagonale) · [Mappa isometrica (classica)](#mappa-isometrica-classica) ·
    [Eliminazione di un mondo](#eliminazione-di-un-mondo)
-9. [Modello di simulazione](#modello-di-simulazione)
+9. [Modello di simulazione](#modello-di-simulazione) · [Identità storiche](#identità-storiche)
 10. [API](#api)
 11. [Prestazioni](#prestazioni)
 12. [Scalabilità](#scalabilità)
@@ -177,6 +177,15 @@ caricamento da `packages/simulation-core/src/normalize.ts`:
 
 Il tutto è coperto da `packages/simulation-core/tests/compatibility.test.ts`, che costruisce uno stato in
 formato 1 rimuovendo ogni campo introdotto dopo, lo ricarica e continua a simulare verificando gli invarianti.
+
+La migrazione `0002_identities` è **additiva e non distruttiva**: aggiunge `identity_id`, `identity_type`
+(default `'legacy'`), `absorbed_identity_ids` e `absorbed_by_tribe_id` a `tribes`, `identity_id`,
+`identity_type`, `political_stem` e `former_names` a `civilizations`, `roster` (nullable) a `worlds`, più gli
+indici `(world_id, identity_id)` e `(world_id, status)`. Le tribù e le civiltà esistenti diventano `legacy` per
+default di colonna (nessun `UPDATE` di massa): conservano nome, eventi e snapshot, non vengono mai rinominate
+né associate a un'identità. I nuovi mondi usano il roster storico (o `procedural`, per le tribù inventate).
+Test: `packages/simulation-core/tests/identity-continuity.test.ts` (stato legacy senza campi di identità) e
+`tests/identity-api.test.ts` (righe legacy nel database).
 
 Per applicare la migrazione a un database esistente:
 
@@ -790,26 +799,129 @@ ricchezza aggregata, edifici, insediamenti, civiltà, tecnologie, guerre, battag
 migrazioni, temperatura media, stress climatico, stabilità media e stagione. A frequenza configurabile
 (default ogni 5 tick) viene salvata anche una riga per civiltà, usata dal confronto nei grafici.
 
+## Identità storiche
+
+Genesis è una **sandbox di storia alternativa**: i popoli di un mondo possono portare il nome di civiltà
+realmente esistite (Egizi, Romani, Maya…), ma il mondo non ne ricostruisce la storia. Il nome è un punto di
+partenza estetico e culturale, non una previsione.
+
+### Tre livelli separati
+
+| Livello                                   | Dove                                               | Cosa contiene                                                                                                                                                                             |
+| ----------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identità (`HistoricalIdentityDefinition`) | `packages/simulation-core/src/identity/catalog.ts` | catalogo statico e versionato: nome, alias, palette, emblema, profilo dei nomi, tag culturali, modificatori leggeri, descrizione e fonti. Mai date, leader, città, territori o tecnologie |
+| Istanza politica (`Tribe`)                | tabella `tribes` (`identity_id`, `identity_type`)  | il popolo dentro uno specifico mondo: può dividersi, essere assorbito o estinguersi                                                                                                       |
+| Storia generata                           | eventi, statistiche, dinastie, `civilizations`     | tutto ciò che la simulazione produce: scoperte, leader, stati, guerre, trasformazioni                                                                                                     |
+
+**Scelta del modello: un'identità, più entità politiche.** Una stessa identità può essere portata da più
+tribù _solo per discendenza_: una banda che si divide o una colonia che si separa conserva `identity_id` e
+registra `parent_tribe_id` ("Egizi del Nord", "Egizi di Naru"). Per questo non esiste un vincolo unico
+`(world_id, identity_id)` sulle tribù, che impedirebbe la frammentazione. L'unicità è imposta dove conta:
+
+- nel **roster di fondazione** (`worlds.roster`), dove un'identità compare una volta sola salvo
+  `allowDuplicateCulturalIdentity` esplicito (e anche allora con nomi distinti);
+- da un **invariante** (`checkIdentityLineage`, controllato a ogni tick nei test) che rifiuta qualsiasi tribù
+  con un'identità che non discenda dal roster: un popolo non può ricomparire dal nulla;
+- da un secondo invariante: due tribù vive non possono avere lo stesso nome.
+
+Le fini di un popolo sono sempre raccontate da un evento: `tribe_extinct` (estinzione), `migration/absorption`
+(assorbimento, con `absorbed_by_tribe_id` e l'identità conservata in `absorbed_identity_ids` dell'ospite),
+`conquest` (l'identità dei vinti entra fra quelle assorbite dal conquistatore), `civilization_transformed/collapse`
+(fine di uno stato). Lo stato (`civilizations`) eredita l'identità della tribù fondatrice e prende un **nome
+politico** che dipende dal governo raggiunto e da un luogo del mondo ("Confederazione di Naru" → "Regno di
+Naru"): ogni cambio genera un evento `civilization_transformed/government` e il nome precedente resta in
+`former_names`.
+
+### Partenza uniforme
+
+Ogni popolo di un mondo storico parte da `STARTING_CIVILIZATION_STATE`: utensili di pietra, governo di clan,
+accampamento nomade, 0,5 di cibo a testa, nessun insediamento. Con `equalStartingLevel` (default) tutti hanno
+anche lo **stesso numero di persone**. Agricoltura, scrittura, metallurgia, navigazione e organizzazione statale
+emergono solo dal motore (area, surplus, popolazione, curiosità, contatti), come per i mondi classici.
+
+I **modificatori d'identità** sono al massimo ±5 punti su una scala 0..100 dei tratti culturali (la cultura
+iniziale ha già uno scarto casuale di ±30), la loro somma è zero, ogni vantaggio ha un compromesso esplicito, si
+applicano una sola volta alla cultura iniziale (che poi deriva liberamente) e si spengono con
+`enableIdentityModifiers: false` (preset competitivo). Lo schema Zod del catalogo rifiuta qualsiasi voce che
+violi queste regole.
+
+**Neutralità dell'identità.** Nomi di persone, luoghi e successori sono generati da flussi pseudo-casuali
+**derivati da seed + id**, mai dal PRNG della simulazione. Ne segue una proprietà verificata dai test: con i
+modificatori spenti, due mondi con lo stesso seed e identità diverse (Egizi/Romani/Maya… contro
+Inca/Greci/Celti…) producono **esattamente la stessa storia** slot per slot. Il nome non può dare vantaggi.
+
+### Roster e creazione del mondo
+
+`POST /api/worlds` accetta `roster` (schema condiviso con il motore, `civilizationRosterConfigSchema`):
+
+| Modalità      | Effetto                                                           |
+| ------------- | ----------------------------------------------------------------- |
+| `random-real` | il seed sceglie `civilizationCount` identità (default, 6)         |
+| `selected`    | esattamente le identità in `identityKeys`                         |
+| `custom`      | le identità scelte, completate a caso fino a `civilizationCount`  |
+| `all-real`    | tutto il catalogo (serve una mappa grande: ~60 celle per civiltà) |
+| `procedural`  | tribù classiche dai nomi inventati, identiche ai mondi di prima   |
+
+Il roster viene estratto **una sola volta**, in `createWorld`, da un flusso derivato dal seed, ed è salvato in
+`worlds.roster`: ricaricare la pagina, rileggere il mondo o riavviare il server non lo rigenera mai. Le chiavi
+sono normalizzate nell'ordine del catalogo, quindi la stessa scelta in ordine diverso produce lo stesso mondo.
+Chi parte dove è una permutazione indipendente dalle identità: nessuno viene messo nella "propria" regione storica.
+
+Con `balancedPlacement` (default) ogni punto di partenza ha acqua a portata (fiume, costa o cella ben irrigata)
+e una qualità del territorio dentro una fascia stretta, la migliore che la mappa riesce a offrire con la
+distanza minima richiesta; qualità e accesso all'acqua di ogni partenza sono registrati nel roster. Le
+differenze che restano non vengono compensate durante la partita: fanno parte del mondo.
+
+### Leader, titoli e nomi
+
+Il leader iniziale è una persona generata dalla simulazione (la più cooperativa e socievole fra gli adulti
+della banda), con nome coerente con il profilo fonetico dell'identità. Ogni profilo ha una lista di **nomi
+riservati** (sovrani e città storiche) che il generatore non produce mai. I titoli dipendono solo dal
+governo effettivamente raggiunto (`politicalTitle`: guida del clan, primo anziano, signore della valle,
+re/regina, custode della città, console), mai dalla fama dell'identità. Insediamenti, dinastie ("Casa di
+Menka") e stati prendono nomi nuovi, coerenti con l'identità ma inventati.
+
+### Rappresentazione
+
+Le descrizioni del catalogo sono contesto statico, mostrate nella scheda come "Nota storica", e citano opere
+di consultazione generale (`sources`). Ogni voce ha `representationNotes` che spiegano semplificazioni ed
+etichette moderne (per esempio "Vichinghi" contro "Norreni", "Aztechi" contro "Mexica"). Il modello non usa mai
+la categoria "razza" e nessun tratto psicologico è attribuito a un popolo come verità: i modificatori sono lievi,
+bilanciati e spegnibili, e la cultura evolve con la storia del mondo. L'interfaccia mostra ovunque il
+disclaimer: _"Le identità storiche sono utilizzate come ispirazione culturale e visuale. Gli eventi, i leader
+e i percorsi di sviluppo sono generati dalla simulazione e non rappresentano la storia reale."_
+
+Per aggiungere un'identità: nuova voce in `catalog.ts` con `key` stabile (è persistita), colore primario non
+ancora usato, profilo dei nomi con i nomi riservati, fonti e note; poi aumentare `IDENTITY_CATALOG_VERSION`.
+
 ## API
 
 Tutte le risposte hanno la forma `{ "data": … }` oppure `{ "error": { "code", "message", "details?" } }`.
 
-| Metodo   | Percorso                           | Note                                                                                                                                                          |
-| -------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/worlds`                      | `{ name, seed?, width?, height? }` (24–96). Genera mappa, tribù e popolazione. 201 → `{ worldId, world }`                                                     |
-| `GET`    | `/api/worlds`                      | elenco dei mondi con riepilogo                                                                                                                                |
-| `GET`    | `/api/worlds/:id`                  | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo         |
-| `PATCH`  | `/api/worlds/:id`                  | `{ status: "running" \| "paused" }`                                                                                                                           |
-| `DELETE` | `/api/worlds/:id`                  | `{ confirmation: "ELIMINA <nome>", worldName }`: elimina il mondo e tutti i suoi dati (vedi [Eliminazione](#eliminazione-di-un-mondo)) → conteggi per tabella |
-| `POST`   | `/api/worlds/:id/simulate`         | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                         |
-| `GET`    | `/api/worlds/:id/events`           | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                    |
-| `GET`    | `/api/worlds/:id/stats`            | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                        |
-| `GET`    | `/api/worlds/:id/people/:personId` | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                                 |
-| `GET`    | `/api/cron/advance`                | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                               |
+| Metodo   | Percorso                                       | Note                                                                                                                                                          |
+| -------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/worlds`                                  | `{ name, seed?, width?, height?, roster? }` (24–96). Genera mappa, roster, popoli e popolazione. 201 → `{ worldId, world }`                                   |
+| `GET`    | `/api/worlds`                                  | elenco dei mondi con riepilogo                                                                                                                                |
+| `GET`    | `/api/worlds/:id`                              | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo         |
+| `PATCH`  | `/api/worlds/:id`                              | `{ status: "running" \| "paused" }`                                                                                                                           |
+| `DELETE` | `/api/worlds/:id`                              | `{ confirmation: "ELIMINA <nome>", worldName }`: elimina il mondo e tutti i suoi dati (vedi [Eliminazione](#eliminazione-di-un-mondo)) → conteggi per tabella |
+| `POST`   | `/api/worlds/:id/simulate`                     | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                         |
+| `GET`    | `/api/worlds/:id/events`                       | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                    |
+| `GET`    | `/api/worlds/:id/stats`                        | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                        |
+| `GET`    | `/api/worlds/:id/people/:personId`             | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                                 |
+| `GET`    | `/api/worlds/:id/civilizations`                | popoli del mondo (istanze politiche): identità, stato, leader con titolo, stato politico, predecessori/successori, identità assorbite                         |
+| `GET`    | `/api/worlds/:id/civilizations/:civId`         | scheda: identità, fondazione (tick 0, leader iniziale, tecnologia iniziale, qualità della partenza), primo insediamento, `realHistoryApplied: false`          |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/history` | storia generata: eventi paginati (`page`, `pageSize`), tecnologie in ordine di scoperta, eventi di guida                                                      |
+| `GET`    | `/api/historical-identities`                   | catalogo: `search` (nome, alias, regione), `category`, `continent`, `page`, `pageSize` (≤ 50). Cache pubblica                                                 |
+| `GET`    | `/api/historical-identities/:key`              | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                               |
+| `GET`    | `/api/cron/advance`                            | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                               |
 
 Codici di errore: `INVALID_INPUT` 400, `TICKS_NOT_ALLOWED` 400, `NOT_FOUND` 404, `SIMULATION_IN_PROGRESS` 409,
 `WORLD_RUNNING` 409, `CONFIRMATION_MISMATCH` 422, `FORBIDDEN` 403, `TIMEOUT` 504, `DATABASE_ERROR` 500,
 `UNAUTHORIZED` 401, `INTERNAL` 500.
+
+Non esiste un endpoint per aggiungere civiltà a un mondo esistente: il roster è assegnato solo alla creazione.
+Le nuove risposte sono validate anche in uscita con gli schemi Zod di `lib/validation/identity.ts`.
 
 Tutti i parametri (body, path e query string) sono validati con Zod: identificativi fuori formato diventano
 `404` invece di raggiungere il database, la paginazione ha un massimo, la ricerca testuale è passata come
@@ -905,7 +1017,13 @@ Il progetto gestisce bene circa 1.000–1.500 individui attivi. Evoluzioni previ
 - Molte decisioni sono prese a livello di comunità (migrazione, costruzioni, diplomazia): gli individui scelgono
   azioni e ruoli, ma non si muovono singolarmente sulla mappa.
 - Ogni batch riscrive tutte le persone vive (upsert a blocchi): semplice e corretto, ma cresce con la popolazione.
-- La grammatica dei template è semplificata (articoli davanti ai nomi delle tribù).
+- La grammatica dei template è semplificata: gli articoli davanti ai nomi dei popoli vengono corretti
+  ("gli Egizi", "degli Inca"), ma frasi come "la tribù Egizi" restano meccaniche.
+- Il catalogo copre 20 identità soprattutto antiche e medievali; le categorie `early_modern` e `modern` sono
+  previste dallo schema ma ancora vuote. La fusione di due popoli in un'identità `composite` è prevista dal
+  tipo ma non ancora prodotta dal motore (oggi un popolo assorbito resta in `absorbed_identity_ids`).
+- Il posizionamento bilanciato riduce le differenze di partenza, non le annulla: sulle mappe piccole la
+  fascia di qualità si allarga.
 - Gli snapshot sono JSON non compressi (qualche centinaio di KB ciascuno): se ne conservano pochi.
 - Nessuna autenticazione: `owner_id` è predisposto ma non usato, e con esso l'RLS.
 - La guerra è un sistema strategico aggregato: non esiste una mappa tattica né il movimento degli eserciti.
@@ -926,5 +1044,8 @@ Il progetto gestisce bene circa 1.000–1.500 individui attivi. Evoluzioni previ
 6. Autenticazione (Supabase Auth) e `owner_id` sui mondi, con policy RLS e test dedicati.
 7. Tracciamento delle entità modificate per salvataggi incrementali; compressione degli snapshot.
 8. Smoke test Playwright (crea mondo → +10 anni → verifica timeline).
-9. **IA narrativa opzionale e locale**: un livello puramente descrittivo sopra gli eventi già persistiti, non
-   deterministico e sempre disattivabile, che non partecipa mai alle decisioni degli agenti.
+9. **Identità**: estendere il catalogo (età moderna, altri popoli), fusioni in identità `composite`,
+   vassallaggi e occupazioni come stati politici espliciti, rendering degli emblemi e degli stili
+   architettonici sulla mappa.
+10. **IA narrativa opzionale e locale**: un livello puramente descrittivo sopra gli eventi già persistiti, non
+    deterministico e sempre disattivabile, che non partecipa mai alle decisioni degli agenti.

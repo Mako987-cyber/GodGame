@@ -7,6 +7,13 @@ import { useDeferredValue, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
 import { api, queryKeys } from "@/lib/client/api";
+import {
+  DEFAULT_ROSTER_FORM,
+  rosterProblem,
+  toRosterInput,
+  type RosterFormState,
+} from "@/lib/client/identity";
+import { RosterPicker } from "./roster-picker";
 import { TerrainPreview } from "./terrain-preview";
 
 const SIZES = [32, 48, 64] as const;
@@ -22,7 +29,9 @@ export function CreateWorldForm() {
   const [name, setName] = useState("");
   const [seed, setSeed] = useState(() => "genesis");
   const [size, setSize] = useState<(typeof SIZES)[number]>(48);
+  const [roster, setRoster] = useState<RosterFormState>(DEFAULT_ROSTER_FORM);
   const previewSeed = useDeferredValue(seed.trim());
+  const problem = rosterProblem(roster, size);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -31,6 +40,7 @@ export function CreateWorldForm() {
         seed: seed.trim() || undefined,
         width: size,
         height: size,
+        roster: toRosterInput(roster),
       }),
     onSuccess: ({ worldId }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.worlds });
@@ -44,7 +54,7 @@ export function CreateWorldForm() {
       className="border-line bg-surface grid gap-5 rounded-lg border p-5 sm:grid-cols-[1fr_minmax(0,220px)]"
       onSubmit={(e) => {
         e.preventDefault();
-        mutation.mutate();
+        if (!problem) mutation.mutate();
       }}
     >
       <div className="flex flex-col gap-4">
@@ -74,7 +84,7 @@ export function CreateWorldForm() {
             </Button>
           </div>
           <p className="text-muted text-xs">
-            Lo stesso seed genera sempre la stessa mappa e le stesse tribù.
+            Lo stesso seed genera sempre la stessa mappa, le stesse civiltà e gli stessi leader iniziali.
           </p>
         </div>
         <div className="grid gap-1.5">
@@ -91,14 +101,6 @@ export function CreateWorldForm() {
             ))}
           </Select>
         </div>
-        {mutation.error && (
-          <p role="alert" className="text-war text-sm">
-            {mutation.error.message}
-          </p>
-        )}
-        <Button type="submit" variant="primary" disabled={mutation.isPending} className="self-start">
-          {mutation.isPending ? "Creazione in corso…" : "Crea il mondo"}
-        </Button>
       </div>
       <div className="flex flex-col gap-2">
         <TerrainPreview seed={previewSeed} size={size} />
@@ -107,6 +109,22 @@ export function CreateWorldForm() {
             ? "Anteprima del terreno generato da questo seed"
             : "Il seed casuale sarà scelto alla creazione"}
         </p>
+      </div>
+      <div className="grid gap-4 sm:col-span-2">
+        <RosterPicker value={roster} onChange={setRoster} />
+        {(problem ?? mutation.error) && (
+          <p role="alert" className="text-war text-sm">
+            {problem ?? mutation.error?.message}
+          </p>
+        )}
+        <Button
+          type="submit"
+          variant="primary"
+          disabled={mutation.isPending || problem !== null}
+          className="self-start"
+        >
+          {mutation.isPending ? "Creazione in corso…" : "Crea il mondo"}
+        </Button>
       </div>
     </form>
   );

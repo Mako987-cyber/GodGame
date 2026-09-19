@@ -37,6 +37,7 @@ export const EVENT_TYPE_LABELS: Record<EventType, string> = {
   unrest: "Tensioni interne",
   culture: "Cultura",
   settlement_growth: "Crescita urbana",
+  civilization_transformed: "Trasformazione politica",
 };
 
 export const IMPORTANCE_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
@@ -77,7 +78,8 @@ export interface EventInput {
  * dropped, and an identical (type, subtype, actors) event already emitted in the same year
  * is merged instead of repeated.
  */
-export function emitEvent(ctx: SimContext, input: EventInput): HistoricalEvent {
+export function emitEvent(ctx: SimContext, rawInput: EventInput): HistoricalEvent {
+  const input = withItalianArticles(rawInput);
   const subtype = input.subtype ?? null;
   if (input.importance < ctx.state.config.observability.minEventImportance) {
     // Below the configured threshold the event is not part of the chronicle at all: it gets
@@ -183,4 +185,58 @@ export function describePlace(state: WorldState, x: number, y: number): string {
 
 export function pluralPeople(n: number): string {
   return n === 1 ? "1 persona" : `${n} persone`;
+}
+
+/** Plural articles and articulated prepositions, with their form before vowels and s+consonant. */
+const ARTICLES: Record<string, string> = {
+  i: "gli",
+  dei: "degli",
+  ai: "agli",
+  nei: "negli",
+  sui: "sugli",
+  dai: "dagli",
+  coi: "con gli",
+};
+
+/** Italian plurals take "gli" before a vowel, s+consonant, z, gn, ps, x, y ("gli Egizi", "degli Inca"). */
+function needsGli(name: string): boolean {
+  return /^([aeiouàèéìòù]|s[^aeiouàèéìòù]|z|gn|ps|x|y)/i.test(name);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Event templates were written for invented names ("i Kaname"); real peoples need the right
+ * article ("gli Egizi", "degli Assiri"). Only tribe names are touched, and only where needed.
+ */
+export function fixArticles(text: string, names: readonly string[]): string {
+  let out = text;
+  for (const name of names) {
+    if (!needsGli(name)) continue;
+    const pattern = new RegExp(
+      `\\b(I|i|[Dd]ei|[Aa]i|[Nn]ei|[Ss]ui|[Dd]ai|[Cc]oi) (${escapeRegExp(name)})`,
+      "g",
+    );
+    out = out.replace(pattern, (_match, article: string, found: string) => {
+      const replacement = ARTICLES[article.toLowerCase()] ?? article;
+      const cased =
+        article[0] === article[0]?.toUpperCase()
+          ? replacement.charAt(0).toUpperCase() + replacement.slice(1)
+          : replacement;
+      return `${cased} ${found}`;
+    });
+  }
+  return out;
+}
+
+function withItalianArticles(input: EventInput): EventInput {
+  const names = input.actors.filter((a) => a.kind === "tribe").map((a) => a.name);
+  if (!names.some(needsGli)) return input;
+  return {
+    ...input,
+    title: fixArticles(input.title, names),
+    description: fixArticles(input.description, names),
+  };
 }

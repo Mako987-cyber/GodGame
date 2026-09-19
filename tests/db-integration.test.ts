@@ -1,4 +1,4 @@
-import { createWorld, hashWorld, runSimulation } from "@genesis/simulation-core";
+import { createWorld, hashWorld, parseRosterConfig, runSimulation } from "@genesis/simulation-core";
 import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Database } from "@/lib/db";
@@ -7,6 +7,7 @@ import { loadWorldState } from "@/lib/db/queries";
 import * as schema from "@/lib/db/schema";
 import {
   createWorldService,
+  DEFAULT_WORLD_ROSTER,
   getEventsService,
   getPersonService,
   getStatsService,
@@ -85,11 +86,27 @@ describe("persistenza", () => {
     await simulateWorldService(world.id, 10, deps);
 
     const loaded = await loadWorldState(db, world.id);
-    const expected = createWorld({ seed: "persistenza" });
+    // New worlds default to a historical roster: the in-memory twin uses the same one.
+    const expected = createWorld({ seed: "persistenza", roster: DEFAULT_WORLD_ROSTER });
     runSimulation(expected, 60);
     expected.archive = { people: [], households: [] };
     expect(loaded).not.toBeNull();
     expect(loaded!.state.tick).toBe(60);
+    expect(hashWorld(loaded!.state)).toBe(hashWorld(expected));
+  });
+
+  it("anche un mondo classico (procedurale) si salva e si ricarica identico", async () => {
+    const deps = { db, lock: new InMemorySimulationLock() };
+    const world = await createWorldService(
+      { name: "Classico", seed: "persistenza-classica", roster: parseRosterConfig({ mode: "procedural" }) },
+      deps,
+    );
+    await simulateWorldService(world.id, 50, deps);
+    const loaded = await loadWorldState(db, world.id);
+    const expected = createWorld({ seed: "persistenza-classica" });
+    runSimulation(expected, 50);
+    expected.archive = { people: [], households: [] };
+    expect(loaded!.state.roster).toBeNull();
     expect(hashWorld(loaded!.state)).toBe(hashWorld(expected));
   });
 
