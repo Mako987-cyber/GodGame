@@ -14,6 +14,8 @@ export const DEFAULT_LAYERS: MapLayerVisibility = {
   tradeRoutes: false,
   conflicts: false,
   labels: true,
+  hexGrid: true,
+  climate: false,
   debugGrid: false,
 };
 
@@ -31,6 +33,8 @@ export const LAYER_LABELS: Record<MapLayerId, string> = {
   tradeRoutes: "Commercio",
   conflicts: "Conflitti e crisi",
   labels: "Nomi",
+  hexGrid: "Griglia esagonale",
+  climate: "Clima (temperatura)",
   debugGrid: "Griglia debug",
 };
 

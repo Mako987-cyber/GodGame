@@ -4,10 +4,12 @@ import {
   setWorldStatusService,
 } from "@/lib/services/world-service";
 import { errorResponse, ok, parse, parseWorldId, readJson, type WorldRouteContext } from "@/lib/utils/api";
-import { updateWorldSchema } from "@/lib/validation/world";
+import { deleteWorldSchema, updateWorldSchema } from "@/lib/validation/world";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+// Deleting a large world removes many rows in one transaction.
+export const maxDuration = 60;
 
 export async function GET(_request: Request, context: WorldRouteContext) {
   try {
@@ -29,11 +31,16 @@ export async function PATCH(request: Request, context: WorldRouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: WorldRouteContext) {
+/**
+ * Deletes the world and all its data. Requires a JSON body
+ * `{ "confirmation": "ELIMINA <nome>", "worldName": "<nome>" }` matching the stored name;
+ * the world must be paused. Responds 404 when the world does not exist (already deleted).
+ */
+export async function DELETE(request: Request, context: WorldRouteContext) {
   try {
     const worldId = parseWorldId((await context.params).worldId);
-    await deleteWorldService(worldId);
-    return ok({ deleted: true });
+    const input = parse(deleteWorldSchema, await readJson(request));
+    return ok(await deleteWorldService(worldId, input));
   } catch (error) {
     return errorResponse(error);
   }

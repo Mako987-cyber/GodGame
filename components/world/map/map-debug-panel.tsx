@@ -28,7 +28,7 @@ export const MapDebugPanel = forwardRef<MapDebugPanelHandle>(function MapDebugPa
     <pre
       ref={pre}
       aria-label="Statistiche di rendering"
-      className="border-line bg-abyss/90 text-muted pointer-events-none absolute bottom-2 left-2 z-20 rounded-md border px-2 py-1.5 font-mono text-[11px] leading-4"
+      className="hud-glass text-muted pointer-events-none rounded-md px-2 py-1.5 font-mono text-[11px] leading-4"
     >
       In attesa del primo frame…
     </pre>

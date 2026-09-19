@@ -1,11 +1,10 @@
 "use client";
 
-import { AlertTriangle, ChevronDown } from "lucide-react";
+import { AlertTriangle, Info, Layers } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Tabs } from "@/components/ui/tabs";
 import type { WorldDetail } from "@/lib/dto";
-import { MAP_DEBUG_PANEL_DEFAULT, type MapMode } from "@/lib/client/map-config";
+import { MAP_DEBUG_PANEL_DEFAULT } from "@/lib/client/map-config";
 import { useWorldUi, type Selection } from "@/lib/client/store";
 import {
   buildIsometricMapViewModel,
@@ -15,27 +14,24 @@ import {
   type IsometricMapViewModel,
   type SelectedMapEntity,
 } from "@/lib/map-renderer";
+import { FloatingPanel } from "../screen/floating-panel";
 import { WorldMap } from "../world-map";
-import { IsometricMapCanvas, type MapController } from "./isometric-map-canvas";
+import { MapCanvas, type MapController, type MapViewState } from "./map-canvas";
 import { MapDebugPanel, type MapDebugPanelHandle } from "./map-debug-panel";
 import { MapErrorBoundary } from "./map-error-boundary";
 import { MapLayerControls } from "./map-layer-controls";
 import { MapLegend } from "./map-legend";
 import { MapToolbar } from "./map-toolbar";
+import { Minimap, type MinimapHandle } from "./minimap";
 import { useMapBattles } from "./use-map-battles";
-
-const MODES: { value: MapMode; label: string }[] = [
-  { value: "isometric", label: "Mappa isometrica" },
-  { value: "debug", label: "Mappa tecnica" },
-];
 
 function toMapEntity(sel: Selection | null): SelectedMapEntity | undefined {
   if (!sel || sel.kind === "person") return undefined;
   return sel;
 }
 
-/** Map target → sidebar selection (buildings select their settlement, resources their cell). */
-function toSelection(t: HitTarget): Selection {
+/** Map target → selection (buildings select their settlement, resources their cell). */
+export function toSelection(t: HitTarget): Selection {
   switch (t.type) {
     case "settlement":
       return { kind: "settlement", id: t.id };
@@ -56,7 +52,7 @@ function toSelection(t: HitTarget): Selection {
 }
 
 /** Where a selection is on the map, if it has a place. */
-function selectionCell(sel: Selection | null, vm: IsometricMapViewModel, detail: WorldDetail) {
+export function selectionCell(sel: Selection | null, vm: IsometricMapViewModel, detail: WorldDetail) {
   if (!sel) return null;
   switch (sel.kind) {
     case "cell":
@@ -103,16 +99,20 @@ function selectionTarget(sel: Selection | null): HitTarget | null {
   }
 }
 
+/**
+ * The full-screen map: canvas behind everything, the vertical toolbar, the minimap and the
+ * layer/legend panels floating over it. The debug renderer is the technical top-down map.
+ */
 export function WorldMapContainer({ detail }: { detail: WorldDetail }) {
-  const { mapMode, setMapMode, mapLayers, toggleMapLayer, selection, select, focus, follow, setFollow } =
-    useWorldUi();
+  const ui = useWorldUi();
+  const { mapMode, setMapMode, mapLayers, toggleMapLayer, selection, select, focus, follow, setFollow } = ui;
   const battles = useMapBattles(detail.world.id, detail.world.currentYear);
   const controller = useRef<MapController>(null);
   const debugRef = useRef<MapDebugPanelHandle>(null);
+  const minimapRef = useRef<MinimapHandle>(null);
   const [hover, setHover] = useState<HitTarget | null>(null);
-  const [panel, setPanel] = useState<"layers" | "legend" | null>(null);
-  const [debugOpen, setDebugOpen] = useState(MAP_DEBUG_PANEL_DEFAULT);
   const [error, setError] = useState<Error | null>(null);
+  const debugOpen = ui.debugStats || MAP_DEBUG_PANEL_DEFAULT;
 
   const base = useMemo(
     () =>
@@ -127,8 +127,9 @@ export function WorldMapContainer({ detail }: { detail: WorldDetail }) {
 
   const onSelect = useCallback((t: HitTarget) => select(toSelection(t)), [select]);
   const onStats = useCallback((s: FrameStats) => debugRef.current?.update(s), []);
+  const onView = useCallback((v: MapViewState) => minimapRef.current?.update(v), []);
   const onError = useCallback((e: Error) => {
-    console.error("[map] isometric renderer failed", e);
+    console.error("[map] renderer failed", e);
     setError(e);
   }, []);
 
@@ -158,38 +159,89 @@ export function WorldMapContainer({ detail }: { detail: WorldDetail }) {
     return d ? `Selezionato: ${d.title}. ${d.lines.slice(0, 2).join(". ")}` : "";
   }, [selection, viewModel]);
 
-  const modeTabs = <Tabs label="Tipo di mappa" items={MODES} value={mapMode} onChange={setMapMode} />;
+  const panels = (
+    <>
+      {ui.panel === "layers" && (
+        <FloatingPanel
+          title="Livelli e lenti"
+          icon={<Layers />}
+          onClose={ui.closePanel}
+          className="sm:top-[7.25rem] sm:left-[4.25rem] sm:max-h-[calc(100dvh-13rem)] sm:w-72 lg:top-[4.25rem] lg:max-h-[calc(100dvh-10rem)]"
+        >
+          <MapLayerControls
+            layers={mapLayers}
+            onToggle={toggleMapLayer}
+            mode={mapMode}
+            onModeChange={setMapMode}
+            debugStats={ui.debugStats}
+            onToggleDebugStats={() => ui.setDebugStats(!ui.debugStats)}
+          />
+        </FloatingPanel>
+      )}
+      {ui.panel === "legend" && (
+        <FloatingPanel
+          title="Legenda"
+          icon={<Info />}
+          onClose={ui.closePanel}
+          className="sm:top-[7.25rem] sm:left-[4.25rem] sm:max-h-[calc(100dvh-13rem)] sm:w-80 lg:top-[4.25rem] lg:max-h-[calc(100dvh-10rem)]"
+        >
+          <MapLegend layers={mapLayers} />
+        </FloatingPanel>
+      )}
+    </>
+  );
+
+  const toolbar = (
+    <div className="pointer-events-none absolute top-[7.25rem] left-3 z-20 lg:top-[4.25rem]">
+      <MapToolbar
+        mode={mapMode}
+        layers={mapLayers}
+        onToggleLayer={toggleMapLayer}
+        onZoomIn={() => controller.current?.zoomBy(1.4)}
+        onZoomOut={() => controller.current?.zoomBy(1 / 1.4)}
+        onCenterWorld={() => controller.current?.resetView()}
+        onCenterSelection={centerSelection}
+        follow={follow}
+        onToggleFollow={followable ? () => setFollow(!follow) : null}
+        minimap={ui.minimap}
+        onToggleMinimap={() => ui.setMinimap(!ui.minimap)}
+        layersOpen={ui.panel === "layers"}
+        onToggleLayers={() => ui.togglePanel("layers")}
+        legendOpen={ui.panel === "legend"}
+        onToggleLegend={() => ui.togglePanel("legend")}
+        statsOpen={debugOpen}
+        onToggleStats={() => ui.setDebugStats(!ui.debugStats)}
+      />
+    </div>
+  );
 
   if (mapMode === "debug") {
     return (
-      <div className="grid gap-3">
-        {modeTabs}
-        <WorldMap detail={detail} />
-      </div>
+      <>
+        <div className="absolute inset-0 overflow-auto px-4 pt-[7.5rem] pb-28 sm:pl-20 lg:pt-[4.5rem]">
+          <div className="hud-glass mx-auto w-[min(100%,calc(100dvh-4rem))] rounded-xl p-3">
+            <WorldMap detail={detail} />
+          </div>
+        </div>
+        {toolbar}
+        {panels}
+      </>
     );
   }
 
   if (!viewModel) {
     return (
-      <div className="grid gap-3">
-        {modeTabs}
-        <div className="border-line text-muted grid h-[50vh] place-items-center rounded-md border text-sm">
-          Questo mondo non ha ancora una mappa da mostrare.
-        </div>
+      <div className="text-muted absolute inset-0 grid place-items-center text-sm">
+        Questo mondo non ha ancora una mappa da mostrare.
       </div>
     );
   }
 
   const fallback = (e: Error, reset: () => void) => (
-    <div
-      role="alert"
-      className="border-war/50 grid h-full place-items-center rounded-md border p-6 text-center"
-    >
-      <div className="grid max-w-sm justify-items-center gap-3">
+    <div role="alert" className="absolute inset-0 grid place-items-center p-6 text-center">
+      <div className="hud-glass grid max-w-sm justify-items-center gap-3 rounded-xl p-6">
         <AlertTriangle className="text-war size-8" aria-hidden />
-        <p className="text-parchment font-serif text-lg">
-          La mappa isometrica non è riuscita a disegnare il mondo.
-        </p>
+        <p className="text-parchment font-serif text-lg">La mappa non è riuscita a disegnare il mondo.</p>
         <p className="text-muted text-sm">{e.message}</p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button
@@ -209,82 +261,52 @@ export function WorldMapContainer({ detail }: { detail: WorldDetail }) {
     </div>
   );
 
-  const sheet = selectionTarget(selection);
-  const sheetText = sheet ? describeTarget(sheet, viewModel) : null;
-
+  const kind = mapMode === "isometric" ? "isometric" : "hex";
   return (
-    <div className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {modeTabs}
-        {battles.isError && <span className="text-muted text-xs">Battaglie recenti non disponibili.</span>}
-      </div>
-      <div className="border-line relative h-[62svh] min-h-[340px] overflow-hidden rounded-md border sm:h-[min(74vh,780px)]">
+    <>
+      <div className="absolute inset-0" data-testid="world-map" data-map-kind={kind}>
         <MapErrorBoundary fallback={fallback}>
           {error ? (
             fallback(error, () => setError(null))
           ) : (
-            <>
-              <IsometricMapCanvas
-                ref={controller}
-                viewModel={viewModel}
-                hoverTarget={hover}
-                focus={focus}
-                onHover={setHover}
-                onSelect={onSelect}
-                onStats={debugOpen ? onStats : undefined}
-                onError={onError}
-              />
-              <MapToolbar
-                onZoomIn={() => controller.current?.zoomBy(1.4)}
-                onZoomOut={() => controller.current?.zoomBy(1 / 1.4)}
-                onReset={() => controller.current?.resetView()}
-                onCenterWorld={() => controller.current?.centerWorld()}
-                onCenterSelection={centerSelection}
-                follow={follow}
-                onToggleFollow={followable ? () => setFollow(!follow) : null}
-                layersOpen={panel === "layers"}
-                onToggleLayers={() => setPanel((p) => (p === "layers" ? null : "layers"))}
-                legendOpen={panel === "legend"}
-                onToggleLegend={() => setPanel((p) => (p === "legend" ? null : "legend"))}
-                debugOpen={debugOpen}
-                onToggleDebug={() => setDebugOpen((d) => !d)}
-              />
-              {panel === "layers" && (
-                <MapLayerControls
-                  layers={mapLayers}
-                  onToggle={toggleMapLayer}
-                  onClose={() => setPanel(null)}
-                />
-              )}
-              {panel === "legend" && <MapLegend layers={mapLayers} onClose={() => setPanel(null)} />}
-              {debugOpen && <MapDebugPanel ref={debugRef} />}
-              {sheetText && !panel && (
-                // Bottom sheet on small screens; on wide screens the sidebar sits next to the map.
-                <div className="border-line bg-abyss/95 absolute inset-x-2 bottom-2 z-20 rounded-lg border p-3 shadow-xl backdrop-blur xl:hidden">
-                  <p className="text-parchment font-serif text-base">{sheetText.title}</p>
-                  <p className="text-muted text-xs">{sheetText.lines.slice(0, 3).join(" · ")}</p>
-                  <button
-                    type="button"
-                    className="text-ochre mt-1 inline-flex items-center gap-1 text-sm"
-                    onClick={() =>
-                      document.getElementById("world-detail")?.scrollIntoView({ behavior: "smooth" })
-                    }
-                  >
-                    Dettagli <ChevronDown className="size-4" aria-hidden />
-                  </button>
-                </div>
-              )}
-            </>
+            <MapCanvas
+              ref={controller}
+              kind={kind}
+              viewModel={viewModel}
+              hoverTarget={hover}
+              focus={focus}
+              onHover={setHover}
+              onSelect={onSelect}
+              onStats={debugOpen ? onStats : undefined}
+              onError={onError}
+              onViewChange={kind === "hex" && ui.minimap ? onView : undefined}
+            />
           )}
         </MapErrorBoundary>
       </div>
+      {toolbar}
+      {kind === "hex" && ui.minimap && !error && (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-20 hidden sm:block">
+          <Minimap
+            ref={minimapRef}
+            viewModel={viewModel}
+            selection={place}
+            large={ui.minimapLarge}
+            onToggleSize={() => ui.setMinimapLarge(!ui.minimapLarge)}
+            onClose={() => ui.setMinimap(false)}
+            onNavigate={(x, y, immediate) => controller.current?.centerOnWorld(x, y, immediate)}
+          />
+        </div>
+      )}
+      {debugOpen && (
+        <div className="pointer-events-none absolute top-[7.25rem] left-[4.25rem] z-10 hidden sm:block lg:top-[4.25rem]">
+          <MapDebugPanel ref={debugRef} />
+        </div>
+      )}
+      {panels}
       <p className="sr-only" aria-live="polite">
         {announcement}
       </p>
-      <p className="text-muted hidden text-xs sm:block">
-        Trascina per spostarti, rotella per lo zoom, clic su un insediamento per i dettagli. Più ti avvicini,
-        più dettagli compaiono: villaggi, strade, edifici, campi.
-      </p>
-    </div>
+    </>
   );
 }

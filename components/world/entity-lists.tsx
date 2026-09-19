@@ -1,12 +1,10 @@
 "use client";
 
-import { X } from "lucide-react";
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import type { WorldDetail } from "@/lib/dto";
 import { fmtInt, STATUS_LABELS, TIER_LABELS, TITLE_LABELS } from "@/lib/client/format";
-import { useWorldUi } from "@/lib/client/store";
+import { useWorldUi, type Selection } from "@/lib/client/store";
 import { CellPanel } from "./cell-panel";
 import { CivilizationPanel, TribePanel } from "./civilization-panel";
 import { PersonPanel } from "./person-panel";
@@ -15,44 +13,39 @@ import { WarPanel } from "./war-panel";
 
 type ListTab = "tribes" | "settlements" | "civilizations" | "people";
 
-export function WorldSidebar({ detail }: { detail: WorldDetail }) {
-  const { selection, select } = useWorldUi();
-  const [tab, setTab] = useState<ListTab>("tribes");
+/** Detail of the selected entity, or null when nothing (known) is selected. */
+export function selectionContent(detail: WorldDetail, selection: Selection | null): React.ReactNode {
+  if (!selection) return null;
+  switch (selection.kind) {
+    case "cell":
+      return <CellPanel x={selection.x} y={selection.y} detail={detail} />;
+    case "tribe": {
+      const tribe = detail.tribes.find((t) => t.id === selection.id);
+      return tribe ? <TribePanel tribe={tribe} detail={detail} /> : null;
+    }
+    case "settlement": {
+      const s = detail.settlements.find((x) => x.id === selection.id);
+      return s ? <SettlementPanel settlement={s} detail={detail} /> : null;
+    }
+    case "civilization": {
+      const c = detail.civilizations.find((x) => x.id === selection.id);
+      return c ? <CivilizationPanel civ={c} detail={detail} /> : null;
+    }
+    case "person":
+      return <PersonPanel personId={selection.id} detail={detail} />;
+    case "war":
+      return <WarPanel aId={selection.aId} bId={selection.bId} detail={detail} />;
+  }
+}
 
-  let content: React.ReactNode = null;
-  if (selection?.kind === "cell") content = <CellPanel x={selection.x} y={selection.y} detail={detail} />;
-  if (selection?.kind === "tribe") {
-    const tribe = detail.tribes.find((t) => t.id === selection.id);
-    if (tribe) content = <TribePanel tribe={tribe} detail={detail} />;
-  }
-  if (selection?.kind === "settlement") {
-    const s = detail.settlements.find((x) => x.id === selection.id);
-    if (s) content = <SettlementPanel settlement={s} detail={detail} />;
-  }
-  if (selection?.kind === "civilization") {
-    const c = detail.civilizations.find((x) => x.id === selection.id);
-    if (c) content = <CivilizationPanel civ={c} detail={detail} />;
-  }
-  if (selection?.kind === "person") content = <PersonPanel personId={selection.id} detail={detail} />;
-  if (selection?.kind === "war")
-    content = <WarPanel aId={selection.aId} bId={selection.bId} detail={detail} />;
-
-  if (content) {
-    return (
-      <div className="relative p-4">
-        <Button
-          size="icon"
-          variant="ghost"
-          className="absolute top-2 right-2"
-          aria-label="Chiudi dettaglio e torna agli elenchi"
-          onClick={() => select(null)}
-        >
-          <X />
-        </Button>
-        {content}
-      </div>
-    );
-  }
+/** Lists of tribes, settlements, civilizations and notable people (the overview panel). */
+export function EntityLists({ detail, onPick }: { detail: WorldDetail; onPick?: () => void }) {
+  const selectRaw = useWorldUi((s) => s.select);
+  const select = (sel: Selection) => {
+    selectRaw(sel);
+    onPick?.();
+  };
+  const [tab, setTab] = useState<ListTab>("civilizations");
 
   const tribes = [...detail.tribes].sort(
     (a, b) => Number(a.status === "extinct") - Number(b.status === "extinct") || b.population - a.population,
@@ -61,13 +54,10 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
     (a, b) => Number(a.status !== "active") - Number(b.status !== "active") || b.population - a.population,
   );
   return (
-    <div className="grid gap-3 p-4">
-      <p className="text-muted text-sm">
-        Seleziona una cella, un villaggio o una tribù sulla mappa, oppure scegli dagli elenchi.
-      </p>
+    <div className="grid gap-3">
       {detail.crises.length > 0 && (
         <p className="text-war text-sm">
-          Crisi in corso: {detail.crises.length}. Usa il livello «Conflitti» della mappa per vederle.
+          Crisi in corso: {detail.crises.length}. Attiva la lente «Conflitti» per vederle sulla mappa.
         </p>
       )}
       <Tabs
@@ -75,15 +65,15 @@ export function WorldSidebar({ detail }: { detail: WorldDetail }) {
         value={tab}
         onChange={setTab}
         items={[
-          { value: "tribes", label: `Tribù (${detail.tribes.filter((t) => t.status !== "extinct").length})` },
-          {
-            value: "settlements",
-            label: `Insediamenti (${detail.settlements.filter((s) => s.status === "active").length})`,
-          },
           {
             value: "civilizations",
             label: `Civiltà (${detail.civilizations.filter((c) => c.status === "active").length})`,
           },
+          {
+            value: "settlements",
+            label: `Insediamenti (${detail.settlements.filter((s) => s.status === "active").length})`,
+          },
+          { value: "tribes", label: `Tribù (${detail.tribes.filter((t) => t.status !== "extinct").length})` },
           { value: "people", label: `Figure (${detail.notablePeople.length})` },
         ]}
       />

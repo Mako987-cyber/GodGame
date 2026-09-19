@@ -15,6 +15,32 @@
 
   --font-serif: var(--font-alegreya), Georgia, serif;
   --font-sans: var(--font-alegreya-sans), system-ui, sans-serif;
+
+  --animate-panel-in: panel-in 160ms ease-out;
+  --animate-sheet-in: sheet-in 200ms ease-out;
+
+  @keyframes panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.99);
+    }
+  }
+  @keyframes sheet-in {
+    from {
+      transform: translateY(24px);
+      opacity: 0;
+    }
+  }
+}
+
+/* Glass panels floating over the map: dark enough for text contrast on any terrain. */
+@utility hud-glass {
+  background: color-mix(in srgb, var(--color-abyss) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-line) 85%, transparent);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
 }
 
 :root {

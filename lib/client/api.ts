@@ -8,6 +8,13 @@ import type {
   WorldListItem,
 } from "@/lib/dto";
 
+export interface DeleteWorldResponse {
+  worldId: string;
+  name: string;
+  deleted: Record<string, number>;
+  total: number;
+}
+
 export interface EventFilters {
   page: number;
   pageSize: number;
@@ -57,7 +64,9 @@ export const api = {
   getWorld: (id: string) => request<WorldDetail>(`/api/worlds/${id}`),
   setStatus: (id: string, status: "running" | "paused") =>
     request<WorldListItem>(`/api/worlds/${id}`, { method: "PATCH", body: JSON.stringify({ status }) }),
-  deleteWorld: (id: string) => request<{ deleted: boolean }>(`/api/worlds/${id}`, { method: "DELETE" }),
+  /** Deletes a world and all its data; the server checks the phrase against the stored name. */
+  deleteWorld: (id: string, input: { confirmation: string; worldName: string }) =>
+    request<DeleteWorldResponse>(`/api/worlds/${id}`, { method: "DELETE", body: JSON.stringify(input) }),
   simulate: (id: string, ticks: number) =>
     request<SimulateResponse>(`/api/worlds/${id}/simulate`, {
       method: "POST",

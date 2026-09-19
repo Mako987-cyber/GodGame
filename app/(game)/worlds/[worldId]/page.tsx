@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { WorldView } from "@/components/world/world-view";
+import { WorldScreen } from "@/components/world/screen/world-screen";
 import { getWorldDetailService } from "@/lib/services/world-service";
 import { AppError } from "@/lib/utils/errors";
 import { worldIdSchema } from "@/lib/validation/world";
@@ -32,5 +32,5 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function WorldPage({ params }: Props) {
   const { worldId } = await params;
   const detail = await load(worldId);
-  return <WorldView initial={detail} />;
+  return <WorldScreen initial={detail} />;
 }

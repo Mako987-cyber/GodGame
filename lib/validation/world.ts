@@ -51,6 +51,34 @@ export const simulateSchema = z.object({
   }),
 });
 
+/**
+ * Deleting a world requires typing this exact phrase. The server compares it with the name it
+ * reads from the database, never with anything the client says the name is.
+ */
+export function deleteConfirmationPhrase(worldName: string): string {
+  return `ELIMINA ${worldName}`;
+}
+
+/** True when both the typed phrase and the typed name match the real name exactly. */
+export function isDeleteConfirmed(
+  realName: string,
+  input: { confirmation: string; worldName: string },
+): boolean {
+  const norm = (v: string) => v.normalize("NFC");
+  return (
+    norm(input.worldName) === norm(realName) &&
+    norm(input.confirmation) === norm(deleteConfirmationPhrase(realName))
+  );
+}
+
+export const deleteWorldSchema = z
+  .object({
+    confirmation: z.string().min(1, "Conferma obbligatoria").max(200),
+    worldName: z.string().min(1, "Nome del mondo obbligatorio").max(200),
+  })
+  .strict();
+export type DeleteWorldInput = z.infer<typeof deleteWorldSchema>;
+
 export const updateWorldSchema = z.object({
   status: z.enum(["running", "paused"]),
 });

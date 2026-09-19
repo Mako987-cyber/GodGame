@@ -382,7 +382,7 @@ export function drawTileDecorations(ctx: CanvasRenderingContext2D, tc: TerrainCo
   }
 }
 
-function drawPeak(ctx: CanvasRenderingContext2D, p: Point, scale: number, snow: boolean) {
+export function drawPeak(ctx: CanvasRenderingContext2D, p: Point, scale: number, snow: boolean) {
   const w = 17 * scale;
   const h = 22 * scale;
   const apex = { x: p.x + 1, y: p.y - h };
@@ -413,7 +413,7 @@ function drawPeak(ctx: CanvasRenderingContext2D, p: Point, scale: number, snow: 
   }
 }
 
-function drawHill(ctx: CanvasRenderingContext2D, p: Point, scale: number) {
+export function drawHill(ctx: CanvasRenderingContext2D, p: Point, scale: number) {
   const w = 15 * scale;
   const h = 8 * scale;
   const g = ctx.createLinearGradient(p.x - w, p.y - h, p.x + w, p.y);

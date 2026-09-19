@@ -6,7 +6,7 @@
  */
 import { sharedAssetRegistry, type AssetRegistry } from "./asset-registry";
 import { drawBorders } from "./border-renderer";
-import { visibleWorldRect, type Viewport } from "./camera";
+import { clampCameraToGrid, visibleWorldRect, type Viewport } from "./camera";
 import { PALETTE, withAlpha } from "./color-palette";
 import { drawBattleIcon, drawConflictLines, drawCrisisIcon, drawHazards } from "./conflict-renderer";
 import { effectiveElevations } from "./elevation-renderer";
@@ -150,6 +150,11 @@ export class IsometricRenderer {
   /** World-space anchor of a grid cell centre (for camera centring). */
   cellCenter(x: number, y: number) {
     return gridToScreen(x + 0.5, y + 0.5, this.elevationAt(Math.floor(x), Math.floor(y)), this.config);
+  }
+
+  /** Keeps the view over the map's diamond. */
+  clampCamera(camera: CameraState, viewport: Viewport): CameraState {
+    return clampCameraToGrid(camera, viewport, this.config, this.vm.width, this.vm.height);
   }
 
   layoutOf(settlementId: string): SettlementLayout | undefined {

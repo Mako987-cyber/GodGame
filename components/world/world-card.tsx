@@ -2,11 +2,12 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import type { WorldListItem } from "@/lib/dto";
 import { EVENT_LABELS, fmtInt, fmtYear, STATUS_LABELS } from "@/lib/client/format";
+import { WorldCardActions } from "./world-card-actions";
 
 export function WorldCard({ world }: { world: WorldListItem }) {
   const s = world.summary;
   return (
-    <li>
+    <li className="relative">
       <Link
         href={`/worlds/${world.id}`}
         className="group border-line bg-surface hover:border-ochre/60 grid gap-3 rounded-lg border p-4 transition-colors"
@@ -40,7 +41,7 @@ export function WorldCard({ world }: { world: WorldListItem }) {
             <dd>{fmtInt(s.civilizations)}</dd>
           </div>
         </dl>
-        <p className="text-muted line-clamp-2 min-h-[2.5rem] text-sm">
+        <p className="text-muted line-clamp-2 min-h-[2.5rem] pr-9 text-sm">
           {s.lastEvent ? (
             <>
               <span className="text-parchment">{EVENT_LABELS[s.lastEvent.type] ?? s.lastEvent.type}:</span>{" "}
@@ -51,6 +52,7 @@ export function WorldCard({ world }: { world: WorldListItem }) {
           )}
         </p>
       </Link>
+      <WorldCardActions world={world} />
     </li>
   );
 }

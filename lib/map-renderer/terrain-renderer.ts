@@ -123,12 +123,23 @@ interface CacheEntry {
   lastUsed: number;
 }
 
-export class ChunkCache {
+/**
+ * Bitmap cache of terrain chunks. The drawing function is injected, so the isometric and the hex
+ * renderers share the same caching, budget and eviction policy.
+ */
+export class ChunkCache<C = TerrainContext> {
   private entries = new Map<string, CacheEntry>();
   private frame = 0;
   builds = 0;
 
-  constructor(private readonly createCanvas: () => HTMLCanvasElement | null) {}
+  constructor(
+    private readonly createCanvas: () => HTMLCanvasElement | null,
+    private readonly drawChunk: (ctx: CanvasRenderingContext2D, chunk: ChunkInfo, context: C) => void = (
+      ctx,
+      chunk,
+      context,
+    ) => drawChunkTiles(ctx, chunk, context as unknown as TerrainContext),
+  ) {}
 
   get size(): number {
     return this.entries.size;
@@ -159,7 +170,7 @@ export class ChunkCache {
    * Cached bitmap for a chunk at a bucket, baking it if the per-frame budget allows.
    * Returns null when the chunk must be drawn directly this frame.
    */
-  get(chunk: ChunkInfo, bucket: number, signature: number, tc: TerrainContext): HTMLCanvasElement | null {
+  get(chunk: ChunkInfo, bucket: number, signature: number, tc: C): HTMLCanvasElement | null {
     const key = `${bucket}|${chunk.cx}:${chunk.cy}`;
     const hit = this.entries.get(key);
     if (hit && hit.signature === signature) {
@@ -177,7 +188,7 @@ export class ChunkCache {
     if (!ctx) return null;
     ctx.setTransform(bucket, 0, 0, bucket, -chunk.rect.x * bucket, -chunk.rect.y * bucket);
     ctx.clearRect(chunk.rect.x, chunk.rect.y, chunk.rect.width, chunk.rect.height);
-    drawChunkTiles(ctx, chunk, tc);
+    this.drawChunk(ctx, chunk, tc);
     this.builds++;
     this.entries.set(key, { canvas, signature, pixels: w * h, lastUsed: this.frame });
     this.evict();

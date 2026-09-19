@@ -40,6 +40,8 @@ export interface MapCellViewModel {
   clay: number;
   /** Index into `regions`, -1 when unclaimed. */
   region: number;
+  /** Index into `tribeIds` of the owning tribe, -1 when unclaimed (war fronts are per tribe). */
+  tribe: number;
   /** Index into `settlements`, -1 when none. */
   settlement: number;
   /** Stable per-cell noise in 0..1 derived from the world seed. */
@@ -212,6 +214,10 @@ export interface MapLayerVisibility {
   tradeRoutes: boolean;
   conflicts: boolean;
   labels: boolean;
+  /** Thin hex outlines at medium and high zoom (hex view only). */
+  hexGrid: boolean;
+  /** Temperature tint (climate lens). */
+  climate: boolean;
   debugGrid: boolean;
 }
 
@@ -223,6 +229,8 @@ export interface IsometricMapViewModel {
   seed: string;
   year: number;
   cells: MapCellViewModel[];
+  /** Tribe id per `MapCellViewModel.tribe` index. */
+  tribeIds: string[];
   regions: RegionViewModel[];
   settlements: SettlementViewModel[];
   nomads: NomadBandViewModel[];
