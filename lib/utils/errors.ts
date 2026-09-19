@@ -6,6 +6,9 @@ export type ErrorCode =
   | "TIMEOUT"
   | "DATABASE_ERROR"
   | "UNAUTHORIZED"
+  | "FORBIDDEN"
+  | "CONFIRMATION_MISMATCH"
+  | "WORLD_RUNNING"
   | "INTERNAL";
 
 const STATUS: Record<ErrorCode, number> = {
@@ -16,6 +19,9 @@ const STATUS: Record<ErrorCode, number> = {
   TIMEOUT: 504,
   DATABASE_ERROR: 500,
   UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
+  CONFIRMATION_MISMATCH: 422,
+  WORLD_RUNNING: 409,
   INTERNAL: 500,
 };
 

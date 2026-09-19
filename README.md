@@ -29,7 +29,9 @@ prodotto, e l'interfaccia li mostra nel pannello «Perché è successo?».
 5. [Test, lint, typecheck](#test-lint-typecheck)
 6. [Deploy su Vercel con Supabase](#deploy-su-vercel-con-supabase)
 7. [Cron opzionale](#cron-opzionale)
-8. [Architettura](#architettura) · [Mappa isometrica](#mappa-isometrica)
+8. [Architettura](#architettura) · [Schermata del mondo](#schermata-del-mondo) ·
+   [Mappa esagonale](#mappa-esagonale) · [Mappa isometrica (classica)](#mappa-isometrica-classica) ·
+   [Eliminazione di un mondo](#eliminazione-di-un-mondo)
 9. [Modello di simulazione](#modello-di-simulazione)
 10. [API](#api)
 11. [Prestazioni](#prestazioni)
@@ -63,38 +65,44 @@ npm run sim:run -- genesis 1000 100
 **Come si usa l'applicazione**
 
 1. Dalla home crea un mondo scegliendo nome, seed (facoltativo) e dimensione della mappa (24–96).
-2. Nella pagina del mondo l'intestazione mostra anno, ultima stagione simulata, indice climatico, tick,
-   stato e seed.
-3. I pulsanti `+1 / +10 / +50 / +100 anni` avanzano il tempo; «Riprendi» mette il mondo in stato `running`
-   e il browser continua a inviare batch finché non metti in pausa.
-4. La mappa ha dieci livelli selezionabili (biomi, fertilità, acqua, risorse, popolazione, territorio,
-   infrastrutture, rotte commerciali, conflitti, influenza culturale) con zoom, trascinamento e legenda.
-5. Un clic su una cella, un villaggio o una banda apre il pannello di dettaglio; dagli elenchi laterali si
-   arriva a tribù, insediamenti, civiltà e figure di rilievo (con la loro famiglia e i loro eventi).
-6. In basso, «Cronaca» filtra gli eventi per periodo, importanza, tipo, protagonista e testo, con il pulsante
-   «Perché è successo?» su ogni evento; «Statistiche» mostra i grafici storici e il confronto fra civiltà.
+2. La pagina del mondo è una **mappa esagonale a tutto schermo**: l'HUD in alto mostra nome, stato, risorse
+   (con la variazione dall'ultimo avanzamento), anno e stagione, controlli del tempo, notifiche e menu.
+3. ▶ avvia la simulazione automatica (velocità 1×, 2×, 5×); «Avanza» esegue a mano `+1 / +10 / +50 / +100`
+   anni. Il browser invia un batch alla volta: sul server non gira nessun ciclo.
+4. La toolbar verticale a sinistra ha zoom, «centra mondo», «centra selezione», «segui», le **lenti**
+   (territori, risorse, infrastrutture, conflitti, commercio, clima), etichette, griglia esagonale, minimappa,
+   tutti i livelli e la legenda. In «Tutti i livelli» si sceglie anche la rappresentazione: esagonale,
+   isometrica classica o mappa tecnica di debug.
+5. Un clic su una cella, un villaggio o una banda apre il **pannello di selezione** flottante (un bottom sheet
+   su mobile), con «centra», «segui», «dettaglio completo» e «riduci». L'icona a colonne nell'HUD apre gli
+   elenchi di civiltà, insediamenti, tribù e figure di rilievo.
+6. La barra in basso mostra l'ultima notifica importante; espansa, l'elenco filtrabile per categoria (un clic
+   centra la mappa sull'entità). Da lì si aprono «Cronaca» (filtri per periodo, importanza, tipo,
+   protagonista e testo, con «Perché è successo?») e «Statistiche».
+7. Il menu (☰) contiene torna ai mondi, informazioni, snapshot, impostazioni mappa, modalità debug ed
+   **Elimina mondo** (anche dalla scheda del mondo nell'elenco).
 
 ## Variabili d'ambiente
 
-| Variabile                                                  | Obbligatoria      | Descrizione                                                                                                                                |
-| ---------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`                                             | in produzione     | Connessione runtime. Su Supabase usa il **pooler in transaction mode** (porta 6543). Fallback: `POSTGRES_URL`.                             |
-| `DIRECT_URL`                                               | per le migrazioni | Connessione diretta/session (porta 5432) usata da `db:migrate`. Fallback: `POSTGRES_URL_NON_POOLING`, poi `DATABASE_URL`.                  |
-| `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`                 | —                 | Create automaticamente dall'integrazione Supabase del Vercel Marketplace: vengono lette senza doverle rinominare.                          |
-| `GODGAME_POSTGRES_URL`, `GODGAME_POSTGRES_URL_NON_POOLING` | —                 | Variabili del database **god_game_db** (Supabase via Vercel), create con il prefisso `GODGAME_`. Lette come fallback runtime e migrazioni. |
-| `DATABASE_ENV_PREFIX`                                      | no (`GODGAME_`)   | Prefisso delle variabili dell'integrazione, se cambia.                                                                                     |
-| `NEXT_PUBLIC_APP_URL`                                      | no                | URL pubblico dell'app.                                                                                                                     |
-| `NEXT_PUBLIC_MAP_RENDERER`                                 | no (`isometric`)  | Mappa mostrata di default: `isometric` oppure `debug` (la mappa tecnica dall'alto). L'utente può sempre cambiarla dalla pagina del mondo.  |
-| `NEXT_PUBLIC_MAP_DEBUG`                                    | no                | `1` apre di default il pannello prestazioni della mappa (FPS, tempo di frame, tile e chunk visibili).                                      |
-| `SIMULATION_MAX_TICKS_PER_REQUEST`                         | no (100)          | Limite di tick per chiamata a `/simulate`.                                                                                                 |
-| `SIMULATION_TIME_BUDGET_MS`                                | no (20000)        | Budget di calcolo per richiesta: oltre questa soglia il batch si ferma e salva i tick completati (`partial: true`).                        |
-| `SIMULATION_LOCK_TTL_MS`                                   | no (60000)        | Durata del lock per mondo (protezione da lock orfani).                                                                                     |
-| `DATABASE_POOL_MAX`                                        | no (3)            | Connessioni massime per istanza serverless.                                                                                                |
-| `PGLITE_DIR`                                               | no                | Cartella di PGlite in locale (default `.data/pglite`).                                                                                     |
-| `CRON_SECRET`                                              | no                | Abilita il cron opzionale `/api/cron/advance`. Senza di esso la route risponde 401.                                                        |
-| `CRON_WORLDS_PER_RUN`                                      | no (3)            | Mondi avanzati al massimo da una singola esecuzione del cron.                                                                              |
-| `CRON_TICKS_PER_WORLD`                                     | no (10)           | Anni simulati per ogni mondo a ogni esecuzione del cron.                                                                                   |
-| `CRON_BUDGET_MS`                                           | no (45000)        | Tempo massimo speso da un'esecuzione del cron prima di fermarsi con i mondi già avanzati salvati.                                          |
+| Variabile                                                  | Obbligatoria      | Descrizione                                                                                                                                   |
+| ---------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                                             | in produzione     | Connessione runtime. Su Supabase usa il **pooler in transaction mode** (porta 6543). Fallback: `POSTGRES_URL`.                                |
+| `DIRECT_URL`                                               | per le migrazioni | Connessione diretta/session (porta 5432) usata da `db:migrate`. Fallback: `POSTGRES_URL_NON_POOLING`, poi `DATABASE_URL`.                     |
+| `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`                 | —                 | Create automaticamente dall'integrazione Supabase del Vercel Marketplace: vengono lette senza doverle rinominare.                             |
+| `GODGAME_POSTGRES_URL`, `GODGAME_POSTGRES_URL_NON_POOLING` | —                 | Variabili del database **god_game_db** (Supabase via Vercel), create con il prefisso `GODGAME_`. Lette come fallback runtime e migrazioni.    |
+| `DATABASE_ENV_PREFIX`                                      | no (`GODGAME_`)   | Prefisso delle variabili dell'integrazione, se cambia.                                                                                        |
+| `NEXT_PUBLIC_APP_URL`                                      | no                | URL pubblico dell'app.                                                                                                                        |
+| `NEXT_PUBLIC_MAP_RENDERER`                                 | no (`hex`)        | Mappa mostrata di default: `hex` (esagonale), `isometric` (classica) oppure `debug` (mappa tecnica dall'alto). L'utente può sempre cambiarla. |
+| `NEXT_PUBLIC_MAP_DEBUG`                                    | no                | `1` apre di default il pannello prestazioni della mappa (FPS, tempo di frame, tile e chunk visibili).                                         |
+| `SIMULATION_MAX_TICKS_PER_REQUEST`                         | no (100)          | Limite di tick per chiamata a `/simulate`.                                                                                                    |
+| `SIMULATION_TIME_BUDGET_MS`                                | no (20000)        | Budget di calcolo per richiesta: oltre questa soglia il batch si ferma e salva i tick completati (`partial: true`).                           |
+| `SIMULATION_LOCK_TTL_MS`                                   | no (60000)        | Durata del lock per mondo (protezione da lock orfani).                                                                                        |
+| `DATABASE_POOL_MAX`                                        | no (3)            | Connessioni massime per istanza serverless.                                                                                                   |
+| `PGLITE_DIR`                                               | no                | Cartella di PGlite in locale (default `.data/pglite`).                                                                                        |
+| `CRON_SECRET`                                              | no                | Abilita il cron opzionale `/api/cron/advance`. Senza di esso la route risponde 401.                                                           |
+| `CRON_WORLDS_PER_RUN`                                      | no (3)            | Mondi avanzati al massimo da una singola esecuzione del cron.                                                                                 |
+| `CRON_TICKS_PER_WORLD`                                     | no (10)           | Anni simulati per ogni mondo a ogni esecuzione del cron.                                                                                      |
+| `CRON_BUDGET_MS`                                           | no (45000)        | Tempo massimo speso da un'esecuzione del cron prima di fermarsi con i mondi già avanzati salvati.                                             |
 
 Le variabili di `god_game_db` sono **sensibili** e definite solo per Preview e Production: Vercel le inietta
 nei deploy (build e runtime) ma `vercel env pull` non può scaricarle. Per usare Supabase anche in locale copia
@@ -295,18 +303,21 @@ curl -H "Authorization: Bearer test" http://localhost:3000/api/cron/advance
 
 ```
 app/                         Next.js App Router: pagine (server) e route handler REST
+  (site)/                    home ed elenco mondi (con l'header del sito)
+  (game)/worlds/[worldId]/   schermata del mondo a tutto schermo, loading, not-found «Mondo non disponibile»
   api/worlds/…               POST/GET mondi, GET/PATCH/DELETE mondo, simulate, events, stats
   api/cron/advance           cron opzionale
 components/
-  ui/                        primitive in stile shadcn (button, input, tabs, badge, panel…)
-  world/                     controlli, cronaca, statistiche, pannelli di dettaglio, mappa tecnica (debug)
-  world/map/                 mappa isometrica: contenitore, canvas, toolbar, livelli, legenda, debug
+  ui/                        primitive in stile shadcn (button, input, tabs, badge, panel, dialog, menu…)
+  world/                     cronaca, statistiche, pannelli di dettaglio, dialog di eliminazione, mappa tecnica
+  world/screen/              schermata del mondo: HUD, controlli del tempo, menu, pannelli flottanti, notifiche
+  world/map/                 mappa a tutto schermo: canvas (hex | isometrico), toolbar, minimappa, livelli, legenda
 lib/
   db/                        schema Drizzle, connessione (postgres-js | PGlite), mapper, repository, lock
   services/world-service.ts  casi d'uso: crea, carica, simula (lock → load → run → save), eventi, statistiche
   validation/                schemi Zod
-  client/                    fetch API, store Zustand (solo UI), palette, formattazione
-  map-renderer/              renderer isometrico Canvas 2D: puro TypeScript, niente React né DB
+  client/                    fetch API, store Zustand (solo UI), HUD, notifiche, eliminazione lato client
+  map-renderer/              renderer Canvas 2D (isometrico e, in hex/, esagonale): puro TypeScript, niente React né DB
   utils/                     errori applicativi, risposte API, logger JSON
 packages/simulation-core/    motore puro: nessun import da Next.js, Drizzle o DB
   src/                       config (Zod), types, prng, stock (risorse), terrain, world-generator,
@@ -335,19 +346,99 @@ ripreso, quindi una funzione morta non blocca il mondo. Per passare a Upstash Re
 con `SET key token NX PX ttl` e un rilascio condizionato al token.
 
 **Pausa/Riprendi**: lo stato `running` è salvato nel mondo. Con il mondo in corso il browser invia un batch alla
-volta (1/10/50/100 anni a passo, scelti con "Velocità") e aspetta la risposta prima del successivo; il cron
-opzionale può fare lo stesso lato server.
+volta e aspetta la risposta prima del successivo; la velocità sceglie batch e pausa (1× = 10 anni ogni 1,4 s,
+2× = 10 anni ogni 0,45 s, 5× = 50 anni ogni 0,45 s, più il tempo di calcolo). Il cron opzionale può fare lo
+stesso lato server.
 
 **Logging**: JSON su una riga. `world.created` (celle, tribù, persone, durata), `simulate.batch` (tick
 richiesti ed eseguiti, persone, insediamenti, tribù, eventi, `loadMs`, `computeMs`, `saveMs`, `msPerTick`,
 durata totale), `cron.advance`, `simulate.failed`, `api.unhandled`. Nessun dato sensibile finisce nei log e le
 risposte di errore non espongono stack trace.
 
-### Mappa isometrica
+### Schermata del mondo
 
-La pagina del mondo mostra una mappa isometrica 2:1 disegnata con **Canvas 2D**, senza librerie aggiuntive. La
-vecchia mappa dall'alto resta disponibile come **mappa tecnica** (selettore sopra la mappa oppure
-`NEXT_PUBLIC_MAP_RENDERER=debug`), e subentra quando il renderer isometrico fallisce: un error boundary e la
+La mappa occupa tutta la viewport e tutto il resto le fluttua sopra; nessun pannello la restringe.
+
+```
+WorldScreen (components/world/screen/world-screen.tsx)
+  ├── WorldMapContainer   mappa a tutto schermo (MapCanvas hex | isometrica, oppure mappa tecnica)
+  │     ├── MapToolbar    zoom, camera, lenti, etichette, griglia, minimappa, livelli, legenda
+  │     ├── Minimap       vista d'insieme cliccabile (solo esagonale; nascosta su mobile)
+  │     └── Livelli / Legenda / pannello prestazioni
+  ├── TopHud              nome, stato, risorse con variazioni e tooltip, anno e stagione, notifiche, menu
+  │     ├── SpeedControls ▶/⏸, 1× 2× 5×, avanza +1 +10 +50 +100 (disabilitati durante una richiesta)
+  │     └── WorldMenu     mondi, info, cronaca, statistiche, mappa, debug, snapshot, elimina
+  ├── SelectionPanel      cella, insediamento, tribù, civiltà, persona o guerra; riducibile; bottom sheet su mobile
+  ├── OverviewPanel       civiltà, insediamenti, tribù, figure (aperto su richiesta)
+  ├── EventLog            ultima notifica; espanso: notifiche filtrabili, collegate a entità e cella
+  └── Dialog              cronaca, statistiche, informazioni/snapshot, dettaglio completo, eliminazione
+```
+
+Lo stato della UI (selezione, pannelli, lenti, velocità, minimappa, notifiche lette) vive nello store Zustand
+`lib/client/store.ts` e non è mai fonte di verità. Gli indicatori dell'HUD (`lib/client/hud.ts`) e le notifiche
+(`lib/client/notifications.ts`) sono funzioni pure derivate dai dati già caricati: nessuna query in più tranne
+una pagina di eventi importanti, invalidata dopo ogni avanzamento. Le notifiche escludono i micro-eventi
+(nascite, commerci, crescita), sono deduplicate per id e unite quando identiche nello stesso anno.
+
+Dopo un avanzamento si invalida la query del mondo: la mappa riceve un nuovo view model e ridisegna solo i
+chunk la cui firma è cambiata, senza ricaricare la pagina. `Esc` chiude il pannello laterale aperto, poi la
+selezione; i dialog nativi (`<dialog>`) intrappolano il focus e lo restituiscono alla chiusura.
+
+### Mappa esagonale
+
+Renderer predefinito, in `lib/map-renderer/hex/`, con lo stesso contratto del renderer isometrico
+(`MapRenderer` in `map-renderer.ts`): il componente `MapCanvas` ospita l'uno o l'altro.
+
+**Convenzione unica** (`hex/geometry.ts`):
+
+- esagoni **pointy-top**, righe orizzontali;
+- la simulazione resta sulla sua griglia quadrata: la cella `(x, y)` è l'esagono in colonna `x`, riga `y` del
+  layout offset **odd-r** (righe dispari spostate a destra di mezzo esagono). Nessuna migrazione dei dati;
+- rendering, distanza, vicini e picking in coordinate **assiali** `(q, r)`; le **cubiche** servono per
+  l'arrotondamento e la distanza; sono disponibili tutte le conversioni `even-q/odd-q/even-r/odd-r`;
+- mondo: `x = size·√3·(q + r/2)`, `y = size·3/2·r`, con `size = 36` px (un esagono è largo ~62 px a zoom 1,
+  come i vecchi tile da 64 px, quindi soglie di zoom ed edifici procedurali restano validi);
+- bordi: la mappa non si avvolge; le celle fuori da `0..width-1 × 0..height-1` non esistono.
+
+Le adiacenze della vista sono quelle esagonali; il motore continua a ragionare sulla sua griglia. Per questo
+fiumi e strade non collegano ogni coppia di celle vicine (sugli esagoni formerebbero triangoli): un fiume scorre
+verso il vicino più basso o verso il mare, le strade seguono un albero ricoprente della loro rete
+(`hex/hex-links.ts`).
+
+| Modulo (`lib/map-renderer/hex/`) | Ruolo                                                                                               |
+| -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `geometry.ts`                    | offset ↔ assiali ↔ cubiche ↔ mondo, distanza, vicini, range, vertici, lati, hit test, `HexGrid`     |
+| `hex-terrain.ts`                 | tessere, rilievo (luce da nord-ovest), acqua e schiuma, campi, clima, decorazioni; chunk con bordo  |
+| `hex-links.ts`                   | collegamenti ad albero di fiumi e strade                                                            |
+| `borders.ts`                     | confini solo dove cambia il proprietario, lati uniti in polilinee, rientro verso la propria regione |
+| `hex-settlements.ts`             | layout deterministici degli insediamenti ancorati all'esagono, edifici, mura, tende nomadi          |
+| `hex-renderer.ts`                | passaggi di disegno, soglie di dettaglio, selezione, etichette, statistiche di frame                |
+| `../minimap.ts`                  | minimappa dal view model già in memoria (nessuna query)                                             |
+
+**Livelli di dettaglio**. Da lontano: biomi, rilievo, acqua, territori con i nomi delle civiltà, icone di
+capitali e città; la griglia è nascosta e i confini sottili compaiono solo per la regione selezionata e per i
+tratti contesi. Da vicino: griglia sottile e semitrasparente (sopra 0,5×), confini di tutte le regioni, campi,
+strade, risorse per cella, edifici, mura e porti. Un villaggio sta nel suo esagono, una città ne occupa anche i
+vicini, una capitale il primo anello, con palazzo e alone dorato. Il colore della civiltà tinge poco il terreno
+(alpha 0,17) e si ritrova su tetti, stendardi ed etichette; la regione selezionata ha anche un tratteggio e un
+bordo doppio, così il territorio non si distingue solo per colore.
+
+**Prestazioni** (Chromium headless con rendering software, mondo 96×96 dopo 400 anni, viewport 1600×1000):
+
+| Vista                      | Tempo di frame | Tile visibili | Chunk visibili  |
+| -------------------------- | -------------- | ------------- | --------------- |
+| Vista d'insieme (0,27×)    | ~0,3 ms        | ~7.600        | 30              |
+| Zoom alto (2,3×, bucket 2) | ~8 ms          | ~200          | 4               |
+| Zoom massimo (3,2×)        | ~1,7 ms        | ~130          | disegno diretto |
+
+Gli FPS misurati (35–40) sono limitati dagli eventi sintetici del test, non dal renderer. Primo canvas in
+~1,4 s dall'apertura della pagina (payload completo del mondo 96×96).
+
+### Mappa isometrica (classica)
+
+La mappa isometrica 2:1 precedente resta disponibile («Tutti i livelli» → Rappresentazione, oppure
+`NEXT_PUBLIC_MAP_RENDERER=isometric`) finché quella esagonale non è considerata stabile, insieme alla
+**mappa tecnica** dall'alto (`debug`), che subentra anche quando un renderer fallisce: un error boundary e la
 gestione degli errori nel ciclo di disegno offrono "Riprova" o "Usa la mappa tecnica".
 
 **Perché Canvas 2D e non PixiJS o Phaser**: le mappe vanno da 24×24 a 96×96 celle (al massimo 9.216 tile). Con
@@ -437,11 +528,15 @@ Finché l'immagine non è caricata, o se manca, `registry.get` restituisce il di
 non si rompe mai. Lo sprite viene scelto al momento del disegno, quindi uno caricato dopo l'apertura della mappa
 compare dal primo frame che la mappa ridisegna. Gli id disponibili sono `building:<tipo>` (vedi `BuildingKind` in `settlement-layout.ts`).
 
-**Accessibilità**. Tutti i dati della mappa restano disponibili nella sidebar: elenchi di tribù, insediamenti e
-civiltà, e i pannelli di dettaglio. I controlli hanno `aria-label`, la legenda è testuale e la selezione viene
-annunciata in una regione `aria-live`. Dalla tastiera: frecce per muoversi, `+`/`−` per lo zoom, `0` per la
-vista iniziale, `Invio` per selezionare al centro. Su mobile la toolbar ha pulsanti grandi, i livelli e la
-legenda si aprono in un pannello dal basso e la selezione compare in un bottom sheet.
+**Accessibilità**. Tutti i dati della mappa restano disponibili come testo: elenchi di civiltà, insediamenti,
+tribù e figure (pannello «Civiltà e insediamenti»), pannelli di dettaglio, legenda testuale, tooltip con
+descrizione della cella o dell'entità. La selezione è annunciata in una regione `aria-live`, così come
+l'avanzamento della simulazione. Controlli, lenti e pulsanti hanno `aria-label` e `aria-pressed`, i menu si
+usano con frecce, Home/End ed Esc, il focus è sempre visibile. Dalla tastiera: frecce per muoversi, `+`/`−`
+per lo zoom, `0` per la vista d'insieme, `Invio` per selezionare al centro, `Esc` per chiudere pannello o
+selezione. Territori e capitali non si distinguono solo per colore (bordi, tratteggio, forme diverse nella
+minimappa). Su mobile toolbar con pulsanti grandi, livelli e legenda in un pannello dal basso, selezione in un
+bottom sheet, minimappa nascosta.
 
 ## Modello di simulazione
 
@@ -699,30 +794,67 @@ migrazioni, temperatura media, stress climatico, stabilità media e stagione. A 
 
 Tutte le risposte hanno la forma `{ "data": … }` oppure `{ "error": { "code", "message", "details?" } }`.
 
-| Metodo   | Percorso                           | Note                                                                                                                                                  |
-| -------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/worlds`                      | `{ name, seed?, width?, height? }` (24–96). Genera mappa, tribù e popolazione. 201 → `{ worldId, world }`                                             |
-| `GET`    | `/api/worlds`                      | elenco dei mondi con riepilogo                                                                                                                        |
-| `GET`    | `/api/worlds/:id`                  | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo |
-| `PATCH`  | `/api/worlds/:id`                  | `{ status: "running" \| "paused" }`                                                                                                                   |
-| `DELETE` | `/api/worlds/:id`                  | elimina il mondo (cascade)                                                                                                                            |
-| `POST`   | `/api/worlds/:id/simulate`         | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                 |
-| `GET`    | `/api/worlds/:id/events`           | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                            |
-| `GET`    | `/api/worlds/:id/stats`            | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                |
-| `GET`    | `/api/worlds/:id/people/:personId` | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                         |
-| `GET`    | `/api/cron/advance`                | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                       |
+| Metodo   | Percorso                           | Note                                                                                                                                                          |
+| -------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/worlds`                      | `{ name, seed?, width?, height? }` (24–96). Genera mappa, tribù e popolazione. 201 → `{ worldId, world }`                                                     |
+| `GET`    | `/api/worlds`                      | elenco dei mondi con riepilogo                                                                                                                                |
+| `GET`    | `/api/worlds/:id`                  | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo         |
+| `PATCH`  | `/api/worlds/:id`                  | `{ status: "running" \| "paused" }`                                                                                                                           |
+| `DELETE` | `/api/worlds/:id`                  | `{ confirmation: "ELIMINA <nome>", worldName }`: elimina il mondo e tutti i suoi dati (vedi [Eliminazione](#eliminazione-di-un-mondo)) → conteggi per tabella |
+| `POST`   | `/api/worlds/:id/simulate`         | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                         |
+| `GET`    | `/api/worlds/:id/events`           | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                    |
+| `GET`    | `/api/worlds/:id/stats`            | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                        |
+| `GET`    | `/api/worlds/:id/people/:personId` | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                                 |
+| `GET`    | `/api/cron/advance`                | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                               |
 
 Codici di errore: `INVALID_INPUT` 400, `TICKS_NOT_ALLOWED` 400, `NOT_FOUND` 404, `SIMULATION_IN_PROGRESS` 409,
-`TIMEOUT` 504, `DATABASE_ERROR` 500, `UNAUTHORIZED` 401, `INTERNAL` 500.
+`WORLD_RUNNING` 409, `CONFIRMATION_MISMATCH` 422, `FORBIDDEN` 403, `TIMEOUT` 504, `DATABASE_ERROR` 500,
+`UNAUTHORIZED` 401, `INTERNAL` 500.
 
 Tutti i parametri (body, path e query string) sono validati con Zod: identificativi fuori formato diventano
 `404` invece di raggiungere il database, la paginazione ha un massimo, la ricerca testuale è passata come
 parametro con i caratteri jolly SQL neutralizzati, e nessuna risposta espone stack trace.
 
+### Eliminazione di un mondo
+
+Operazione distruttiva, mai automatica: parte solo da un dialog esplicito e passa da controlli lato server.
+
+**Grafo delle dipendenze** (verificato su `schema.ts` e sulle migrazioni): tutte le tabelle di un mondo hanno
+`world_id → worlds.id ON DELETE CASCADE` — `world_cells`, `tribes`, `households`, `people`, `settlements`,
+`civilizations`, `world_technologies`, `relationships`, `historical_events`, `world_stats`, `world_snapshots`,
+`dynasties`, `civilization_stats`, `simulation_runs`, `simulation_locks`. Gli id interni (`t3`, `s5`, `p12`…)
+stanno in chiavi `(world_id, id)`, quindi nessuna riga può riferirsi a un altro mondo. `technologies` è il
+catalogo globale condiviso: **non viene mai toccato**. Non esistono file o oggetti Storage legati ai mondi.
+Nessuna migrazione è stata necessaria.
+
+**Strategia** (`deleteWorldService` + `lib/db/world-deletion.ts`):
+
+1. Zod valida `worldId` (UUID, altrimenti 404) e il corpo `{ confirmation, worldName }` (campi extra: 400).
+2. Se il mondo non esiste: 404 (una seconda richiesta non ha effetti).
+3. Controlli: proprietario (se `owner_id` è valorizzato serve quell'utente: una richiesta anonima riceve 403),
+   frase esatta `ELIMINA <nome>` e nome confrontati con quelli **salvati nel database** (422), mondo in pausa
+   (409 `WORLD_RUNNING`).
+4. Acquisizione del lock di simulazione del mondo: nessun batch può partire né essere in corso (409).
+5. Transazione: `SELECT … FOR UPDATE` sulla riga del mondo, nuova verifica dei controlli, conteggio ed
+   eliminazione di ogni tabella figlia filtrata per `world_id`, eliminazione del mondo, verifica che nessuna
+   tabella abbia più righe di quel mondo (altrimenti rollback), commit.
+6. Risposta: righe eliminate per tabella e totale (inclusa la riga di lock della cancellazione stessa).
+   Nessun SQL né stack trace nelle risposte; i fallimenti restituiscono `DATABASE_ERROR` senza modifiche.
+
+La UI mostra nome, seed e cosa verrà eliminato, chiede di digitare `ELIMINA <nome>` (pulsante disabilitato
+finché non coincide), impedisce il doppio invio, mette in pausa un mondo in esecuzione, svuota la cache delle
+query del mondo e torna all'elenco. Aprire l'URL di un mondo eliminato mostra «Mondo non disponibile».
+
+I test (`tests/world-deletion.test.ts`) girano su un PGlite in memoria creato dal test: id non valido,
+mondo inesistente, conferma o nome errati, utente non autorizzato, mondo in esecuzione, lock preso,
+eliminazione completa senza orfani né effetti su altri mondi e sul catalogo, idempotenza, richieste
+concorrenti, rollback con un guasto iniettato da un trigger.
+
 ### Sicurezza
 
-Non esiste ancora autenticazione: la colonna `owner_id` è predisposta ma non usata, e non viene introdotta in
-questa fase per non rendere invasivo il cambiamento. Il database è raggiunto **solo dal server** attraverso
+Non esiste ancora autenticazione: la colonna `owner_id` è predisposta ma non usata (tranne che per negare
+l'eliminazione di un mondo con proprietario a chi non lo è), e non viene introdotta in questa fase per non
+rendere invasivo il cambiamento. Il database è raggiunto **solo dal server** attraverso
 `postgres-js`: nessuna chiave Supabase arriva al browser e `SUPABASE_SERVICE_ROLE_KEY` non è mai esposta.
 
 Quando verrà introdotta l'autenticazione (Supabase Auth), le tabelle esposte al client andranno protette con

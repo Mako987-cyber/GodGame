@@ -75,7 +75,13 @@ export function drawConflictLines(
   }
 }
 
-function drawCampaignArrow(ctx: CanvasRenderingContext2D, a: Point, b: Point, px: number, alpha: number) {
+export function drawCampaignArrow(
+  ctx: CanvasRenderingContext2D,
+  a: Point,
+  b: Point,
+  px: number,
+  alpha: number,
+) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const len = Math.hypot(dx, dy) || 1;

@@ -2,10 +2,9 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
-  IsometricRenderer,
   centerOn,
-  clampCameraToGrid,
   createFittedCamera,
+  createMapRenderer,
   describeTarget,
   lerpCamera,
   pan,
@@ -13,9 +12,11 @@ import {
   zoomAt,
   ZOOM,
   type CameraState,
+  type CanvasRendererKind,
   type FrameStats,
   type HitTarget,
   type IsometricMapViewModel,
+  type MapRenderer,
   type TargetDescription,
   type Viewport,
 } from "@/lib/map-renderer";
@@ -26,9 +27,19 @@ export interface MapController {
   centerWorld: () => void;
   /** Flies to a cell; `minZoom` raises the zoom if the camera is further out. */
   flyToCell: (x: number, y: number, minZoom?: number) => void;
+  /** Centres the view on a world point (minimap navigation). */
+  centerOnWorld: (x: number, y: number, immediate?: boolean) => void;
+}
+
+/** What the camera shows, in world coordinates (for the minimap). */
+export interface MapViewState {
+  view: { x: number; y: number; width: number; height: number };
+  bounds: { x: number; y: number; width: number; height: number };
 }
 
 interface Props {
+  /** Which renderer draws the map; changing it rebuilds the renderer and keeps the data. */
+  kind: CanvasRendererKind;
   viewModel: IsometricMapViewModel;
   hoverTarget: HitTarget | null;
   focus: { x: number; y: number; nonce: number } | null;
@@ -36,6 +47,8 @@ interface Props {
   onSelect: (target: HitTarget) => void;
   onStats?: (stats: FrameStats) => void;
   onError: (error: Error) => void;
+  /** Called after frames where the camera moved (at most once per frame). */
+  onViewChange?: (view: MapViewState) => void;
 }
 
 const ANIMATION_MS = 380;
@@ -46,17 +59,19 @@ function ease(t: number): number {
 }
 
 /**
- * The isometric canvas. Camera, hover and animation live in refs: panning and zooming never
- * re-render React, the renderer draws only when something changed.
+ * The map canvas (hex or isometric renderer). Camera, hover and animation live in refs: panning
+ * and zooming never re-render React, the renderer draws only when something changed.
  */
-export const IsometricMapCanvas = forwardRef<MapController, Props>(function IsometricMapCanvas(
-  { viewModel, hoverTarget, focus, onHover, onSelect, onStats, onError },
+export const MapCanvas = forwardRef<MapController, Props>(function MapCanvas(
+  { kind, viewModel, hoverTarget, focus, onHover, onSelect, onStats, onError, onViewChange },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<IsometricRenderer | null>(null);
+  const rendererRef = useRef<MapRenderer | null>(null);
+  const kindRef = useRef<CanvasRendererKind | null>(null);
+  const lastViewKey = useRef("");
   const cameraRef = useRef<CameraState | null>(null);
   const viewportRef = useRef<Viewport>({ width: 0, height: 0 });
   const animRef = useRef<{ from: CameraState; to: CameraState; start: number } | null>(null);
@@ -71,12 +86,12 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
     null,
   );
   const lastStatsAt = useRef(0);
-  const callbacks = useRef({ onHover, onSelect, onStats, onError });
+  const callbacks = useRef({ onHover, onSelect, onStats, onError, onViewChange });
   const viewModelRef = useRef(viewModel);
   const [tooltip, setTooltip] = useState<TargetDescription | null>(null);
 
   useEffect(() => {
-    callbacks.current = { onHover, onSelect, onStats, onError };
+    callbacks.current = { onHover, onSelect, onStats, onError, onViewChange };
   });
 
   const requestRender = useCallback(() => {
@@ -95,13 +110,7 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
         camera = lerpCamera(anim.from, anim.to, ease(t), viewport);
         if (t >= 1) animRef.current = null;
       }
-      camera = clampCameraToGrid(
-        camera,
-        viewport,
-        renderer.config,
-        viewModelRef.current.width,
-        viewModelRef.current.height,
-      );
+      camera = renderer.clampCamera(camera, viewport);
       cameraRef.current = camera;
       try {
         const dpr = window.devicePixelRatio || 1;
@@ -115,6 +124,20 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
         if (callbacks.current.onStats && time - lastStatsAt.current > 250) {
           lastStatsAt.current = time;
           callbacks.current.onStats(result.stats);
+        }
+        const onView = callbacks.current.onViewChange;
+        if (onView) {
+          const view = {
+            x: -camera.x / camera.zoom,
+            y: -camera.y / camera.zoom,
+            width: viewport.width / camera.zoom,
+            height: viewport.height / camera.zoom,
+          };
+          const key = `${Math.round(view.x)}:${Math.round(view.y)}:${Math.round(view.width)}`;
+          if (key !== lastViewKey.current) {
+            lastViewKey.current = key;
+            onView({ view, bounds: renderer.bounds });
+          }
         }
         if (result.needsAnotherFrame || animRef.current) requestRender();
       } catch (e) {
@@ -143,21 +166,28 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
     const renderer = rendererRef.current;
     try {
       if (!canvas.getContext("2d")) throw new Error("Il browser non supporta Canvas 2D.");
-      if (renderer?.accepts(viewModel)) renderer.setViewModel(viewModel);
+      if (renderer && kindRef.current === kind && renderer.accepts(viewModel))
+        renderer.setViewModel(viewModel);
       else {
         renderer?.dispose();
-        rendererRef.current = new IsometricRenderer(canvas, viewModel);
+        rendererRef.current = createMapRenderer(kind, canvas, viewModel);
+        kindRef.current = kind;
         cameraRef.current = null;
+        lastViewKey.current = "";
       }
     } catch (e) {
       callbacks.current.onError(e instanceof Error ? e : new Error(String(e)));
       return;
     }
     if (!cameraRef.current && viewportRef.current.width > 0 && rendererRef.current) {
-      cameraRef.current = createFittedCamera(rendererRef.current.bounds, viewportRef.current);
+      cameraRef.current = createFittedCamera(
+        rendererRef.current.bounds,
+        viewportRef.current,
+        kindRef.current === "hex" ? "cover" : "contain",
+      );
     }
     requestRender();
-  }, [viewModel, requestRender]);
+  }, [kind, viewModel, requestRender]);
 
   useEffect(
     () => () => {
@@ -208,7 +238,12 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
       viewportRef.current = { width, height };
       const renderer = rendererRef.current;
       if (renderer) {
-        if (!cameraRef.current) cameraRef.current = createFittedCamera(renderer.bounds, viewportRef.current);
+        if (!cameraRef.current)
+          cameraRef.current = createFittedCamera(
+            renderer.bounds,
+            viewportRef.current,
+            kindRef.current === "hex" ? "cover" : "contain",
+          );
         else if (prev.width > 0) {
           // Keep the same world point at the centre when the container resizes.
           cameraRef.current = pan(cameraRef.current, (width - prev.width) / 2, (height - prev.height) / 2);
@@ -242,6 +277,11 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
           centerOn(camera, { x: b.x + b.width / 2, y: b.y + b.height / 2 }, viewportRef.current),
           true,
         );
+      },
+      centerOnWorld: (x, y, immediate = false) => {
+        const camera = cameraRef.current;
+        if (!camera) return;
+        setCamera(centerOn(camera, { x, y }, viewportRef.current), !immediate);
       },
       flyToCell: (x, y, minZoom = 0) => {
         const renderer = rendererRef.current;
@@ -343,8 +383,8 @@ export const IsometricMapCanvas = forwardRef<MapController, Props>(function Isom
         ref={canvasRef}
         tabIndex={0}
         role="application"
-        aria-roledescription="mappa isometrica"
-        aria-label={`Mappa isometrica del mondo ${viewModel.width}×${viewModel.height}. Trascina per spostare la vista, rotella o pizzico per lo zoom; frecce per muovere, + e − per lo zoom, 0 per vedere tutto, Esc per annullare la selezione.`}
+        aria-roledescription={kind === "hex" ? "mappa esagonale" : "mappa isometrica"}
+        aria-label={`Mappa ${kind === "hex" ? "esagonale" : "isometrica"} del mondo ${viewModel.width}×${viewModel.height}. Trascina per spostare la vista, rotella o pizzico per lo zoom; frecce per muovere, + e − per lo zoom, 0 per vedere tutto, Esc per annullare la selezione.`}
         className="block h-full w-full cursor-grab touch-none outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ochre)] active:cursor-grabbing"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);

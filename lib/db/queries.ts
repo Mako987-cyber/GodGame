@@ -177,11 +177,6 @@ export async function listWorldRows(db: Database, limit = 50): Promise<s.WorldRo
   return db.select().from(s.worlds).orderBy(desc(s.worlds.updatedAt)).limit(limit);
 }
 
-export async function deleteWorldRow(db: Database, worldId: string): Promise<boolean> {
-  const rows = await db.delete(s.worlds).where(eq(s.worlds.id, worldId)).returning({ id: s.worlds.id });
-  return rows.length > 0;
-}
-
 export async function updateWorldStatus(db: Database, worldId: string, status: "paused" | "running") {
   const [row] = await db
     .update(s.worlds)

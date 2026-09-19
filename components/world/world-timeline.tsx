@@ -26,9 +26,9 @@ interface Filters {
 
 const EMPTY: Filters = { type: "", minImportance: 2, search: "", fromYear: "", toYear: "", actorId: "" };
 
-export function WorldTimeline({ detail }: { detail: WorldDetail }) {
+export function WorldTimeline({ detail, actorId }: { detail: WorldDetail; actorId?: string }) {
   const worldId = detail.world.id;
-  const [filters, setFilters] = useState<Filters>(EMPTY);
+  const [filters, setFilters] = useState<Filters>(() => ({ ...EMPTY, actorId: actorId ?? "" }));
   const [page, setPage] = useState(1);
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const focusOn = useWorldUi((s) => s.focusOn);

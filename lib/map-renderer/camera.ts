@@ -21,14 +21,23 @@ export function fitZoom(bounds: Rect, viewport: Viewport, padding = 24): number 
   return Math.min(w / bounds.width, h / bounds.height);
 }
 
-/** Camera showing the whole map, centred; zoom limits adapt to the map size. */
-export function createFittedCamera(bounds: Rect, viewport: Viewport): CameraState {
-  const zoom = fitZoom(bounds, viewport);
+/**
+ * Camera centred on the map; zoom limits adapt to the map size. `contain` shows the whole map,
+ * `cover` fills the viewport (the map-first opening view), still allowing to zoom out to `contain`.
+ */
+export function createFittedCamera(
+  bounds: Rect,
+  viewport: Viewport,
+  mode: "contain" | "cover" = "contain",
+): CameraState {
+  const contain = fitZoom(bounds, viewport);
+  const cover = Math.max(viewport.width / bounds.width, viewport.height / bounds.height);
+  const zoom = mode === "cover" ? Math.max(contain, cover) : contain;
   const camera: CameraState = {
     x: 0,
     y: 0,
     zoom,
-    minZoom: Math.min(zoom * 0.75, 1),
+    minZoom: Math.min(contain * 0.75, 1),
     maxZoom: Math.max(ABSOLUTE_MAX_ZOOM, zoom * 2),
   };
   return centerOn(camera, { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, viewport);
@@ -111,4 +120,14 @@ export function lerpCamera(from: CameraState, to: CameraState, t: number, viewpo
   const zoom = from.zoom * Math.pow(to.zoom / from.zoom, k);
   const center = { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
   return { ...to, zoom, x: viewport.width / 2 - center.x * zoom, y: viewport.height / 2 - center.y * zoom };
+}
+
+/** Keeps the viewport centre inside a world rectangle (maps without a projected diamond, e.g. hex). */
+export function clampCameraToRect(camera: CameraState, viewport: Viewport, rect: Rect): CameraState {
+  const zoom = clampZoom(camera.zoom, camera);
+  const c = { x: (viewport.width / 2 - camera.x) / zoom, y: (viewport.height / 2 - camera.y) / zoom };
+  const x = Math.min(rect.x + rect.width, Math.max(rect.x, c.x));
+  const y = Math.min(rect.y + rect.height, Math.max(rect.y, c.y));
+  if (x === c.x && y === c.y && zoom === camera.zoom) return camera;
+  return { ...camera, zoom, x: viewport.width / 2 - x * zoom, y: viewport.height / 2 - y * zoom };
 }

@@ -36,6 +36,7 @@ export function cell(
     coal: 0,
     clay: 0,
     region: -1,
+    tribe: -1,
     settlement: -1,
     noise: 0.5,
     ...over,

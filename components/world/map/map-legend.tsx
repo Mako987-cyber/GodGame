@@ -1,7 +1,5 @@
 "use client";
 
-import { X } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { BIOME_LABELS } from "@/lib/client/format";
 import type { MapLayerVisibility } from "@/lib/map-renderer";
 import { BIOME_TOP, PALETTE, RESOURCE_COLORS } from "@/lib/map-renderer/color-palette";
@@ -25,10 +23,10 @@ function Line({ color, dash, width = 3 }: { color: string; dash?: string; width?
   );
 }
 
-function Diamond({ color }: { color: string }) {
+function Hex({ color }: { color: string }) {
   return (
-    <svg width="18" height="10" aria-hidden className="shrink-0">
-      <polygon points="9,0 18,5 9,10 0,5" fill={color} />
+    <svg width="12" height="14" aria-hidden className="shrink-0">
+      <polygon points="6,0 12,3.5 12,10.5 6,14 0,10.5 0,3.5" fill={color} />
     </svg>
   );
 }
@@ -41,25 +39,14 @@ const TIERS: { label: string; desc: string; size: number; square: boolean; star?
 ];
 
 /** Text legend: every symbol on the map is described here, never by colour alone. */
-export function MapLegend({ layers, onClose }: { layers: MapLayerVisibility; onClose: () => void }) {
+export function MapLegend({ layers }: { layers: MapLayerVisibility }) {
   return (
-    <div
-      role="dialog"
-      aria-label="Legenda della mappa"
-      className="border-line bg-abyss/95 absolute inset-x-2 bottom-2 z-30 max-h-[70%] overflow-y-auto rounded-lg border p-3 text-xs shadow-xl backdrop-blur sm:inset-x-auto sm:top-14 sm:right-2 sm:bottom-auto sm:w-72"
-      onKeyDown={(e) => e.key === "Escape" && onClose()}
-    >
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="font-serif text-lg">Legenda</h3>
-        <Button size="icon" variant="ghost" aria-label="Chiudi la legenda" onClick={onClose}>
-          <X />
-        </Button>
-      </div>
+    <div className="text-xs">
       <h4 className="text-muted mb-1 tracking-wide uppercase">Biomi</h4>
       <ul className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1">
         {BIOME_ORDER.map((b, i) => (
           <li key={b} className="flex items-center gap-1.5">
-            <Diamond color={BIOME_TOP[b]} />
+            <Hex color={BIOME_TOP[b]} />
             {BIOME_LABELS[i]}
           </li>
         ))}
@@ -108,6 +95,15 @@ export function MapLegend({ layers, onClose }: { layers: MapLayerVisibility; onC
         <li className="flex items-center gap-2">
           <Line color="#c9a0dc" width={2} /> Confine (colore della civiltà o tribù)
         </li>
+        <li className="flex items-center gap-2">
+          <svg width="26" height="10" aria-hidden className="shrink-0">
+            <pattern id="legend-hatch" width="4" height="4" patternUnits="userSpaceOnUse">
+              <path d="M-1,5 L5,-1" stroke="#fff4d6" strokeOpacity="0.6" />
+            </pattern>
+            <rect x="1" y="1" width="24" height="8" fill="url(#legend-hatch)" stroke="#c9a0dc" />
+          </svg>
+          Territorio selezionato (tratteggio + bordo rinforzato)
+        </li>
         {layers.tradeRoutes && (
           <li className="flex items-center gap-2">
             <Line color={PALETTE.trade} dash="5 4" /> Rotta commerciale (spessore = volume)
@@ -152,6 +148,16 @@ export function MapLegend({ layers, onClose }: { layers: MapLayerVisibility; onC
             A zoom basso le risorse vicine sono raggruppate; il numero indica quante sono.
           </p>
         </>
+      )}
+      {layers.climate && (
+        <p className="text-muted mt-3 flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-24 shrink-0 rounded-sm"
+            style={{ background: "linear-gradient(90deg, #4f86c6, #e8e2b0, #d9622b)" }}
+          />
+          Clima: dal freddo (blu) al caldo (arancio).
+        </p>
       )}
       {layers.fertility && (
         <p className="text-muted mt-3">Fertilità: dal bruno (sterile) al verde acceso (molto fertile).</p>

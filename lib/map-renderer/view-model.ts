@@ -142,6 +142,7 @@ export function buildIsometricMapViewModel(
       coal: num(m.coal[i]),
       clay: num(m.clay[i]),
       region,
+      tribe: owner,
       settlement: m.settlement[i] ?? -1,
       noise: unitFloat(hashInts(seedHash, x, y)),
     };
@@ -379,6 +380,7 @@ export function buildIsometricMapViewModel(
     seed,
     year: detail.world.currentYear,
     cells,
+    tribeIds: detail.tribes.map((t) => t.id),
     regions,
     settlements,
     nomads,

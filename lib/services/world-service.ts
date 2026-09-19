@@ -15,7 +15,6 @@ import {
 import { getDb, type Database } from "@/lib/db";
 import { PostgresSimulationLock, type SimulationLock } from "@/lib/db/lock";
 import {
-  deleteWorldRow,
   getCivilizationStatsSeries,
   getLatestSnapshot,
   getPersonDetail,
@@ -31,6 +30,7 @@ import {
   updateWorldStatus,
 } from "@/lib/db/queries";
 import type { EventRow, WorldRow } from "@/lib/db/schema";
+import { deleteWorldTransaction, WorldNotFoundError, type WorldTableName } from "@/lib/db/world-deletion";
 import * as schema from "@/lib/db/schema";
 import { simulationConfig } from "@/lib/config";
 import type {
@@ -47,7 +47,12 @@ import type {
 } from "@/lib/dto";
 import { AppError, notFound } from "@/lib/utils/errors";
 import { errorDetails, logger } from "@/lib/utils/logger";
-import type { CreateWorldInput, EventsQuery } from "@/lib/validation/world";
+import {
+  isDeleteConfirmed,
+  type CreateWorldInput,
+  type DeleteWorldInput,
+  type EventsQuery,
+} from "@/lib/validation/world";
 
 export interface ServiceDeps {
   db: Database;
@@ -464,9 +469,91 @@ export async function setWorldStatusService(
   return toListItem(row);
 }
 
-export async function deleteWorldService(worldId: string, deps?: Pick<ServiceDeps, "db">) {
-  const { db } = deps ?? (await defaultDeps());
-  if (!(await deleteWorldRow(db, worldId))) throw notFound();
+/** Who is asking. The project has no authentication yet: the principal is always anonymous. */
+export interface Actor {
+  userId: string | null;
+}
+export const ANONYMOUS: Actor = { userId: null };
+
+export interface DeleteWorldResult {
+  worldId: string;
+  name: string;
+  deleted: Record<WorldTableName, number>;
+  total: number;
+}
+
+/** Every precondition of a deletion, checked before taking the lock and again inside the transaction. */
+function assertDeletable(row: WorldRow, input: DeleteWorldInput, actor: Actor) {
+  // Ownership is reserved for future authentication: an owned world can only be deleted by its
+  // owner, and an anonymous request can never prove to be the owner.
+  if (row.ownerId !== null && row.ownerId !== actor.userId) {
+    throw new AppError("FORBIDDEN", "Non sei autorizzato a eliminare questo mondo");
+  }
+  if (!isDeleteConfirmed(row.name, input)) {
+    throw new AppError(
+      "CONFIRMATION_MISMATCH",
+      "La conferma non corrisponde al nome del mondo: nessun dato è stato eliminato",
+    );
+  }
+  if (row.status === "running") {
+    throw new AppError("WORLD_RUNNING", "Il mondo è in esecuzione: mettilo in pausa prima di eliminarlo");
+  }
+}
+
+/**
+ * Deletes one world and every row that belongs to it.
+ *
+ * Guard rails: typed confirmation checked against the stored name, ownership, the world must be
+ * paused, the per-world simulation lock is held (no batch can start or be running), and the
+ * deletion itself is one transaction that locks the world row, re-checks everything, deletes
+ * all child tables scoped by `world_id`, and verifies that nothing is left before committing.
+ */
+export async function deleteWorldService(
+  worldId: string,
+  input: DeleteWorldInput,
+  deps?: ServiceDeps & { actor?: Actor },
+): Promise<DeleteWorldResult> {
+  const { db, lock } = deps ?? (await defaultDeps());
+  const actor = deps?.actor ?? ANONYMOUS;
+  const row = await getWorldRow(db, worldId);
+  if (!row) throw notFound();
+  assertDeletable(row, input, actor);
+
+  const ttl = simulationConfig().lockTtlMs;
+  let handle: Awaited<ReturnType<SimulationLock["acquire"]>>;
+  try {
+    handle = await lock.acquire(worldId, ttl);
+  } catch (error) {
+    // The world vanished meanwhile (the lock row references it): that is a concurrent deletion.
+    if (!(await getWorldRow(db, worldId))) throw notFound();
+    throw mapDbError(error);
+  }
+  if (!handle) {
+    throw new AppError(
+      "SIMULATION_IN_PROGRESS",
+      "Una simulazione o un'altra operazione è in corso su questo mondo: riprova tra qualche secondo",
+    );
+  }
+  const started = Date.now();
+  try {
+    const { row: deletedRow, deleted } = await deleteWorldTransaction(db, worldId, (locked) =>
+      assertDeletable(locked, input, actor),
+    );
+    const total = Object.values(deleted).reduce((a, b) => a + b, 0);
+    logger.info("world.deleted", { worldId, total, durationMs: Date.now() - started, deleted });
+    return { worldId, name: deletedRow.name, deleted, total };
+  } catch (error) {
+    if (error instanceof WorldNotFoundError) throw notFound();
+    if (!(error instanceof AppError))
+      logger.error("world.delete_failed", { worldId, ...errorDetails(error) });
+    throw error instanceof AppError
+      ? error
+      : new AppError("DATABASE_ERROR", "Eliminazione non riuscita: nessun dato è stato modificato");
+  } finally {
+    await lock
+      .release(handle)
+      .catch((e) => logger.error("world.delete_unlock_failed", { worldId, ...errorDetails(e) }));
+  }
 }
 
 export async function getEventsService(
