@@ -119,6 +119,10 @@ export const tribeFromRow = (seed: string, r: Select<typeof s.tribes>): Tribe =>
     distribution: r.distribution ?? undefined,
     dynastyId: r.dynastyId,
     lastLeaderChangeYear: r.lastLeaderChangeYear,
+    identityId: r.identityId,
+    identityType: r.identityType,
+    absorbedIdentityIds: r.absorbedIdentityIds ?? [],
+    absorbedByTribeId: r.absorbedByTribeId,
   } as Tribe);
 
 export const personToRow = (worldId: string, p: Person): Insert<typeof s.people> => ({ worldId, ...p });
@@ -230,6 +234,10 @@ export const civilizationFromRow = (r: Select<typeof s.civilizations>): Civiliza
   capitalSettlementId: r.capitalSettlementId,
   foundedYear: r.foundedYear,
   status: r.status,
+  identityId: r.identityId,
+  identityType: r.identityType,
+  politicalStem: r.politicalStem,
+  formerNames: r.formerNames ?? [],
 });
 
 export const relationshipToRow = (worldId: string, rel: Relationship): Insert<typeof s.relationships> => ({

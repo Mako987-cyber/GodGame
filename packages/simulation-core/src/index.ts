@@ -40,7 +40,15 @@ export {
   type ResourceKind,
 } from "./stock";
 export { Rng, deriveRng, hashCode, hashFloat, type RngState } from "./prng";
-export { createWorld, type CreateWorldOptions } from "./world-generator";
+export {
+  createWorld,
+  hasWaterAccess,
+  pickBalancedStartingCells,
+  pickStartingCells,
+  startingAreaQuality,
+  type CreateWorldOptions,
+} from "./world-generator";
+export * from "./identity";
 export { generateTerrain, computeHabitability } from "./terrain";
 export {
   runSimulation,
@@ -89,6 +97,7 @@ export {
   normalizeCell,
   normalizePerson,
   normalizeRelationship,
+  normalizeCivilization,
   normalizeSettlement,
   normalizeSkills,
   normalizeTribe,

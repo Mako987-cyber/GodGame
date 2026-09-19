@@ -4,12 +4,17 @@ import {
   createWorld,
   definingSeason,
   deriveCulture,
+  getIdentity,
+  parseRosterConfig,
+  politicalTitle,
   initialStability,
   missingResources,
   normalizeStock,
   runSimulation,
   TECHNOLOGIES,
   tierFromLevel,
+  type CivilizationRosterConfigInput,
+  type GovernmentType,
   type ResourceBundle,
 } from "@genesis/simulation-core";
 import { getDb, type Database } from "@/lib/db";
@@ -46,6 +51,7 @@ import type {
   WorldListItem,
 } from "@/lib/dto";
 import { AppError, notFound } from "@/lib/utils/errors";
+import { toIdentitySummary } from "./identity-dto";
 import { errorDetails, logger } from "@/lib/utils/logger";
 import {
   isDeleteConfirmed,
@@ -104,11 +110,26 @@ export function toEventDTO(e: EventRow | EventDTO): EventDTO {
   };
 }
 
+/** Roster of a world created without explicit choices: random historical identities, uniform start. */
+export const DEFAULT_WORLD_ROSTER: CivilizationRosterConfigInput = { mode: "random-real" };
+
 export async function createWorldService(input: CreateWorldInput, deps?: ServiceDeps) {
   const { db } = deps ?? (await defaultDeps());
   const seed = input.seed ?? randomSeed();
   const started = Date.now();
-  const state = createWorld({ seed, width: input.width, height: input.height ?? input.width });
+  const roster = parseRosterConfig(input.roster ?? DEFAULT_WORLD_ROSTER);
+  let state: ReturnType<typeof createWorld>;
+  try {
+    // The roster is drawn here, once: it is stored with the world and never drawn again.
+    state = createWorld({ seed, width: input.width, height: input.height ?? input.width, roster });
+  } catch (error) {
+    if (error instanceof Error && /abbastanza celle|Posizioni di partenza/.test(error.message))
+      throw new AppError(
+        "INVALID_INPUT",
+        "La mappa è troppo piccola per così tante civiltà: aumenta la dimensione o riduci il roster",
+      );
+    throw error;
+  }
   const row = await insertWorld(db, { id: crypto.randomUUID(), name: input.name, state });
   logger.info("world.created", {
     worldId: row.id,
@@ -117,6 +138,8 @@ export async function createWorldService(input: CreateWorldInput, deps?: Service
     cells: state.cells.length,
     tribes: state.tribes.length,
     people: state.people.length,
+    rosterMode: roster.mode,
+    identities: state.roster?.entries.map((e) => e.identityId).join(",") ?? null,
     simulationVersion: state.simulationVersion,
     durationMs: Date.now() - started,
   });
@@ -251,8 +274,18 @@ export async function getWorldDetailService(
         .filter((s) => s.civilizationId === c.id && s.status === "active")
         .map((s) => s.id),
       population: memberTribes.reduce((acc, t) => acc + (byTribe.get(t.id)?.population ?? 0), 0),
+      identityId: c.identityId ?? null,
+      identityType: c.identityType ?? "legacy",
+      formerNames: c.formerNames ?? [],
     };
   });
+  // Only the identities this world uses travel with it, never the whole catalog.
+  const usedIdentities = new Set<string>();
+  for (const t of tribes) {
+    if (t.identityId) usedIdentities.add(t.identityId);
+    for (const id of t.absorbedIdentityIds ?? []) usedIdentities.add(id);
+  }
+  for (const e of row.roster?.entries ?? []) usedIdentities.add(e.identityId);
 
   return {
     world: {
@@ -280,6 +313,7 @@ export async function getWorldDetailService(
     map,
     tribes: tribes.map((t) => {
       const leader = t.leaderId ? people.get(t.leaderId) : undefined;
+      const government = (t.government ?? "clan") as GovernmentType;
       const agg = byTribe.get(t.id) ?? { population: 0, adults: 0, children: 0 };
       const dynasty = t.dynastyId
         ? dynasties.find((d: (typeof dynasties)[number]) => d.id === t.dynastyId)
@@ -303,7 +337,14 @@ export async function getWorldDetailService(
         techProgress: t.techProgress,
         techAdoption: t.techAdoption ?? {},
         civilizationId: t.civilizationId,
-        leader: leader ? { id: leader.id, name: leader.name, age: leader.age } : null,
+        leader: leader
+          ? {
+              id: leader.id,
+              name: leader.name,
+              age: leader.age,
+              title: politicalTitle(government, leader.sex ?? null),
+            }
+          : null,
         foundedYear: t.foundedYear,
         extinctYear: t.extinctYear,
         morale: t.morale,
@@ -312,7 +353,12 @@ export async function getWorldDetailService(
         scarcityYears: t.scarcityYears,
         parentTribeId: t.parentTribeId,
         culture: t.culture ?? deriveCulture(row.seed, t.id),
-        government: t.government ?? "clan",
+        government,
+        identityId: t.identityId ?? null,
+        identityType: t.identityType ?? "legacy",
+        emblemKey: getIdentity(t.identityId)?.visualProfile.emblemKey ?? null,
+        absorbedIdentityIds: t.absorbedIdentityIds ?? [],
+        absorbedByTribeId: t.absorbedByTribeId ?? null,
         stability: t.stability ?? initialStability(),
         distribution: t.distribution ?? "egalitarian",
         dynasty: dynasty
@@ -428,6 +474,20 @@ export async function getWorldDetailService(
         prestige: round2(p.prestige ?? 0),
       })),
     lastSnapshot: snapshot ? { tick: snapshot.tick, year: snapshot.year } : null,
+    roster: row.roster
+      ? {
+          mode: row.roster.config.mode,
+          catalogVersion: row.roster.catalogVersion,
+          enableIdentityModifiers: row.roster.config.enableIdentityModifiers,
+          balancedPlacement: row.roster.config.balancedPlacement,
+          equalStartingLevel: row.roster.config.equalStartingLevel,
+          entries: row.roster.entries.map((e) => ({ ...e })),
+        }
+      : null,
+    identities: [...usedIdentities]
+      .map((key) => getIdentity(key))
+      .filter((i) => i !== undefined)
+      .map(toIdentitySummary),
   };
 }
 

@@ -4,6 +4,7 @@ import { emptyStock, nextId } from "./context";
 import { initialStability } from "./culture";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { cellsInRadius, distance } from "./grid";
+import { getIdentity, identityPlaceName, recordAbsorbedIdentity, successorName } from "./identity";
 import { tribeName } from "./names";
 import { areaQuality, workArea } from "./resources";
 import { grantTech } from "./technology";
@@ -149,8 +150,17 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
   const parent = community.tribe;
   const { id, seq } = nextId(ctx.state, "tribe", "t");
   const used = new Set(ctx.state.tribes.map((t) => t.name));
-  let name = tribeName(ctx.rng);
-  while (used.has(name)) name = tribeName(ctx.rng);
+  const identity = getIdentity(parent.identityId);
+  let name: string;
+  if (identity) {
+    // The band that leaves is still the same people: it is named after a new home of its own.
+    const usedPlaces = new Set(ctx.state.settlements.map((s) => s.name));
+    const home = identityPlaceName(identity.namingProfile, `${ctx.state.seed}:${id}:home`, usedPlaces);
+    name = successorName(identity, parent, parent, home, used);
+  } else {
+    name = tribeName(ctx.rng);
+    while (used.has(name)) name = tribeName(ctx.rng);
+  }
   const target = Math.floor(community.members.length * 0.4);
   const moving = new Set<string>();
   for (const p of community.members) {
@@ -183,6 +193,10 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     stability: initialStability(),
     dynastyId: null,
     lastLeaderChangeYear: null,
+    identityId: parent.identityId,
+    identityType: parent.identityType,
+    absorbedIdentityIds: [],
+    absorbedByTribeId: null,
   };
   child.stock.food = Math.round(parent.stock.food * 0.4 * 100) / 100;
   parent.stock.food = Math.round((parent.stock.food - child.stock.food) * 100) / 100;
@@ -207,7 +221,7 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     y: parent.y,
     title: `Nasce la tribù ${child.name}`,
     description: `La tribù ${parent.name} era diventata troppo numerosa: ${pluralPeople(moving.size)} si sono separate formando la tribù ${child.name}.`,
-    metadata: { parentTribeId: parent.id, population: moving.size },
+    metadata: { parentTribeId: parent.id, population: moving.size, identityId: parent.identityId },
   });
   return child;
 }
@@ -245,6 +259,9 @@ export function joinNearbyGroup(
   tribe.stock = emptyStock();
   tribe.status = "extinct";
   tribe.extinctYear = ctx.state.year;
+  tribe.absorbedByTribeId = host.tribe.id;
+  // The people is not erased: its identity lives on inside the host.
+  recordAbsorbedIdentity(host.tribe, tribe);
   ctx.counters.migrations += members.length;
   emitEvent(ctx, {
     type: "migration",
@@ -255,7 +272,13 @@ export function joinNearbyGroup(
     y: host.y,
     title: `I ${tribe.name} si uniscono ai ${host.tribe.name}`,
     description: `Ridotti a ${pluralPeople(members.length)}, gli ultimi ${tribe.name} si sono uniti alla tribù ${host.tribe.name}${host.settlement ? ` presso ${host.settlement.name}` : ""}.`,
-    metadata: { absorbedTribeId: tribe.id, hostTribeId: host.tribe.id, population: members.length },
+    metadata: {
+      absorbedTribeId: tribe.id,
+      hostTribeId: host.tribe.id,
+      population: members.length,
+      absorbedIdentityId: tribe.identityId,
+      hostIdentityId: host.tribe.identityId,
+    },
   });
   for (const techId of carried) grantTech(ctx, host.tribe, techId, "migration");
   return true;

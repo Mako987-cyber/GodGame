@@ -18,6 +18,8 @@ import {
   STATUS_LABELS,
 } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
+import { IdentityEmblem } from "./identity-emblem";
+import { TribeIdentitySection } from "./identity-section";
 import { EntityLink, Facts, Meter, StockList, SubHeading, TraitList } from "./stat-bits";
 
 export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDetail }) {
@@ -39,7 +41,11 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
           <h2 className="flex items-center gap-2 font-serif text-2xl">
-            <span className="size-3.5 rounded-sm" style={{ background: tribe.color }} aria-hidden />
+            {tribe.emblemKey ? (
+              <IdentityEmblem emblemKey={tribe.emblemKey} color={tribe.color} size="sm" />
+            ) : (
+              <span className="size-3.5 rounded-sm" style={{ background: tribe.color }} aria-hidden />
+            )}
             {tribe.name}
           </h2>
           <p className="text-muted text-sm">
@@ -54,10 +60,17 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           {STATUS_LABELS[tribe.status]}
         </Badge>
       </div>
+      <TribeIdentitySection tribe={tribe} detail={detail} />
+      <SubHeading>Situazione attuale</SubHeading>
       <Facts
         items={[
           ["Popolazione", `${fmtInt(tribe.population)} (${fmtInt(tribe.children)} minori)`],
-          ["Guida", tribe.leader ? `${tribe.leader.name}, ${tribe.leader.age} anni` : "Nessuna"],
+          [
+            "Guida",
+            tribe.leader
+              ? `${tribe.leader.name}, ${tribe.leader.title}, ${tribe.leader.age} anni`
+              : "Nessuna",
+          ],
           [
             "Civiltà",
             civ ? (
@@ -222,12 +235,22 @@ export function CivilizationPanel({ civ, detail }: { civ: CivilizationDTO; detai
       };
     });
   const techs = new Set(memberTribes.flatMap((t) => t.techs));
+  const identity = detail.identities.find((i) => i.key === civ.identityId);
   return (
     <div>
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
-          <h2 className="font-serif text-2xl">{civ.name}</h2>
-          <p className="text-muted text-sm">Civiltà fondata nel {fmtYear(civ.foundedYear)}</p>
+          <h2 className="flex items-center gap-2 font-serif text-2xl">
+            {identity && <IdentityEmblem emblemKey={identity.emblemKey} color={civ.color} size="sm" />}
+            {civ.name}
+          </h2>
+          <p className="text-muted text-sm">
+            Stato fondato nel {fmtYear(civ.foundedYear)}
+            {identity ? ` · identità: ${identity.displayName}` : ""}
+          </p>
+          {civ.formerNames.length > 0 && (
+            <p className="text-muted text-xs">Forme precedenti: {civ.formerNames.join(" → ")}</p>
+          )}
         </div>
         <Badge tone={civ.status === "active" ? "growth" : "war"}>{STATUS_LABELS[civ.status]}</Badge>
       </div>

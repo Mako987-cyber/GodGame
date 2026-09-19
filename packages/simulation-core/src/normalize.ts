@@ -6,6 +6,7 @@ import { emptyStock, normalizeStock } from "./stock";
 import type {
   ActiveCrisis,
   Cell,
+  Civilization,
   Climate,
   ConstructionProject,
   Counters,
@@ -140,7 +141,21 @@ export function normalizeTribe(seed: string, tribe: Tribe): Tribe {
   tribe.distribution ??= "egalitarian" satisfies DistributionPolicy;
   if (tribe.dynastyId === undefined) tribe.dynastyId = null;
   if (tribe.lastLeaderChangeYear === undefined) tribe.lastLeaderChangeYear = null;
+  // Tribes from before historical identities keep their invented name forever: `legacy`,
+  // never renamed and never assigned an identity after the fact.
+  tribe.identityId ??= null;
+  tribe.identityType ??= tribe.identityId ? "historical" : "legacy";
+  tribe.absorbedIdentityIds ??= [];
+  tribe.absorbedByTribeId ??= null;
   return tribe;
+}
+
+export function normalizeCivilization(civ: Civilization): Civilization {
+  civ.identityId ??= null;
+  civ.identityType ??= civ.identityId ? "historical" : "legacy";
+  civ.politicalStem ??= null;
+  civ.formerNames ??= [];
+  return civ;
 }
 
 function inferGovernment(tribe: Tribe): GovernmentType {
@@ -285,6 +300,8 @@ export function migrateState(state: WorldState): WorldState {
   for (const person of state.archive.people) normalizePerson(person);
   for (const tribe of state.tribes) normalizeTribe(state.seed, tribe);
   for (const settlement of state.settlements) normalizeSettlement(settlement);
+  for (const civ of state.civilizations) normalizeCivilization(civ);
+  state.roster ??= null;
   for (const rel of state.relationships) normalizeRelationship(rel);
   // Dynasties of legacy worlds start from the tribes that already have a leader.
   if (state.simulationVersion < SIMULATION_VERSION) state.simulationVersion = SIMULATION_VERSION;

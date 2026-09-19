@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_MAP_SIZE, MIN_MAP_SIZE } from "@genesis/simulation-core";
+import { rosterInputSchema } from "./identity";
 
 export const ALLOWED_TICKS = [1, 10, 50, 100] as const;
 export type AllowedTicks = (typeof ALLOWED_TICKS)[number];
@@ -28,6 +29,7 @@ export const EVENT_TYPES = [
   "unrest",
   "culture",
   "settlement_growth",
+  "civilization_transformed",
 ] as const;
 
 const mapSize = z.coerce.number().int().min(MIN_MAP_SIZE).max(MAX_MAP_SIZE);
@@ -42,6 +44,8 @@ export const createWorldSchema = z.object({
     .transform((v) => (v ? v : undefined)),
   width: mapSize.optional(),
   height: mapSize.optional(),
+  /** Civilization roster. Omitted: random historical identities with a uniform start. */
+  roster: rosterInputSchema.optional(),
 });
 export type CreateWorldInput = z.infer<typeof createWorldSchema>;
 

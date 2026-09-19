@@ -4,6 +4,7 @@ import type { Community, SimContext } from "./context";
 import { emptyStock, nextId } from "./context";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { cellAt, cellsInRadius, clamp, distance, lineCells, round } from "./grid";
+import { getIdentity, identityPlaceName, politicalName, successorName } from "./identity";
 import { civilizationName, settlementName, tribeName } from "./names";
 import { areaQuality, workArea } from "./resources";
 import {
@@ -15,7 +16,15 @@ import {
   type ResourceBundle,
 } from "./stock";
 import type { TechEffects } from "./technology";
-import type { BuildingType, Cell, ConstructionProject, Settlement, SettlementTier, Tribe } from "./types";
+import type {
+  BuildingType,
+  Cell,
+  Civilization,
+  ConstructionProject,
+  Settlement,
+  SettlementTier,
+  Tribe,
+} from "./types";
 
 /** Years a band must stay in the same place before settling down. */
 export const SETTLE_AFTER_YEARS = 8;
@@ -37,8 +46,15 @@ export function createSettlement(
 ): Settlement {
   const { id, seq } = nextId(ctx.state, "settlement", "s");
   const used = new Set(ctx.state.settlements.map((s) => s.name));
-  let name = settlementName(ctx.rng);
-  while (used.has(name)) name = settlementName(ctx.rng);
+  const identity = getIdentity(tribe.identityId);
+  let name: string;
+  if (identity) {
+    // Named from the identity's phonetics on a stream of its own: no draw from the simulation RNG.
+    name = identityPlaceName(identity.namingProfile, `${ctx.state.seed}:${id}`, used);
+  } else {
+    name = settlementName(ctx.rng);
+    while (used.has(name)) name = settlementName(ctx.rng);
+  }
   const buildings = emptyBuildings();
   buildings.camp = 1;
   const settlement: Settlement = {
@@ -765,15 +781,22 @@ export function checkCivilization(ctx: SimContext, tribe: Tribe, population: num
   if (own.length < 2 || population < 100) return;
   const capital = own.reduce((best, s) => (s.population > best.population ? s : best));
   const { id, seq } = nextId(ctx.state, "civilization", "c");
-  const civ = {
+  // A people with a historical identity keeps its name; the state takes a political name that
+  // follows its government and the place it grew around ("Regno di Naru").
+  const historical = getIdentity(tribe.identityId) !== undefined;
+  const civ: Civilization = {
     id,
     seq,
-    name: civilizationName(ctx.rng, tribe.name),
+    name: historical ? politicalName(tribe.government, capital.name) : civilizationName(ctx.rng, tribe.name),
     color: tribe.color,
     founderTribeId: tribe.id,
     capitalSettlementId: capital.id,
     foundedYear: ctx.state.year,
-    status: "active" as const,
+    status: "active",
+    identityId: tribe.identityId,
+    identityType: tribe.identityType,
+    politicalStem: historical ? capital.name : null,
+    formerNames: [],
   };
   ctx.state.civilizations.push(civ);
   tribe.civilizationId = id;
@@ -789,11 +812,64 @@ export function checkCivilization(ctx: SimContext, tribe: Tribe, population: num
     description: `Con ${own.length} insediamenti e ${population} abitanti, la tribù ${tribe.name} si è data un'organizzazione comune: nasce la civiltà «${civ.name}», con capitale ${capital.name}.`,
     metadata: {
       civilizationId: id,
+      identityId: tribe.identityId,
       settlements: own.length,
       population,
       government: tribe.government,
       technologies: tribe.techs.length,
     },
+  });
+}
+
+/**
+ * A state of a historical people changes its political name when its government changes
+ * ("Confederazione di Naru" → "Regno di Naru"): same state, same identity, a new form.
+ */
+export function updateCivilizationForm(ctx: SimContext, civ: Civilization) {
+  if (!civ.politicalStem) return;
+  const founder = ctx.tribes.get(civ.founderTribeId);
+  if (!founder || founder.status === "extinct") return;
+  const next = politicalName(founder.government, civ.politicalStem);
+  if (next === civ.name) return;
+  const previous = civ.name;
+  civ.formerNames.push(previous);
+  civ.name = next;
+  const capital = civ.capitalSettlementId ? ctx.settlements.get(civ.capitalSettlementId) : undefined;
+  emitEvent(ctx, {
+    type: "civilization_transformed",
+    subtype: "government",
+    importance: 4,
+    actors: [actor.civilization(civ), actor.tribe(founder)],
+    x: capital?.x ?? founder.x,
+    y: capital?.y ?? founder.y,
+    title: `${previous} diventa ${next}`,
+    description: `Con il passaggio a un nuovo ordinamento, lo stato fondato dai ${founder.name} cambia forma: ${previous} diventa ${next}. Il popolo e la sua identità restano gli stessi.`,
+    metadata: {
+      civilizationId: civ.id,
+      identityId: civ.identityId,
+      previousName: previous,
+      government: founder.government,
+    },
+  });
+}
+
+/** A state that lost every settlement ends here: it is recorded, never silently recreated. */
+export function recordCivilizationCollapse(ctx: SimContext, civ: Civilization) {
+  const founder = ctx.tribes.get(civ.founderTribeId);
+  emitEvent(ctx, {
+    type: "civilization_transformed",
+    subtype: "collapse",
+    importance: 5,
+    actors: [actor.civilization(civ), ...(founder ? [actor.tribe(founder)] : [])],
+    x: founder?.x ?? null,
+    y: founder?.y ?? null,
+    title: `Crolla ${civ.name}`,
+    description: `${civ.name} non controlla più alcun insediamento: lo stato si dissolve.${
+      founder && founder.status !== "extinct"
+        ? ` I ${founder.name} sopravvivono senza uno stato proprio.`
+        : ""
+    }`,
+    metadata: { civilizationId: civ.id, identityId: civ.identityId, foundedYear: civ.foundedYear },
   });
 }
 
@@ -823,8 +899,15 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
 
   const { id, seq } = nextId(ctx.state, "tribe", "t");
   const used = new Set(ctx.state.tribes.map((t) => t.name));
-  let name = tribeName(ctx.rng);
-  while (used.has(name)) name = tribeName(ctx.rng);
+  const identity = getIdentity(parent.identityId);
+  let name: string;
+  if (identity) {
+    // Same people, new polity: "Egizi del Sud", never an unrelated second "Egizi".
+    name = successorName(identity, capital, s, s.name, used);
+  } else {
+    name = tribeName(ctx.rng);
+    while (used.has(name)) name = tribeName(ctx.rng);
+  }
   const tribe: Tribe = {
     ...parent,
     id,
@@ -851,6 +934,10 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     stability: { ...initialStability(), legitimacy: 0.5, tension: 0.2 },
     dynastyId: null,
     lastLeaderChangeYear: null,
+    identityId: parent.identityId,
+    identityType: parent.identityType,
+    absorbedIdentityIds: [],
+    absorbedByTribeId: null,
   };
   // The new polity drifts culturally from the parent right away.
   tribe.culture.centralization = clamp(tribe.culture.centralization - 10, 5, 95);
@@ -902,6 +989,7 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
       secession: true,
       settlementId: s.id,
       parentTribeId: parent.id,
+      identityId: parent.identityId,
       distance: distance(capital.x, capital.y, s.x, s.y),
       unrest: s.unrest,
       tension: parent.stability.tension,

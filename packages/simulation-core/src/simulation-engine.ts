@@ -35,6 +35,8 @@ import { normalizeState } from "./serialization";
 import {
   canFoundSettlement,
   checkCivilization,
+  recordCivilizationCollapse,
+  updateCivilizationForm,
   checkCollapse,
   foundSettlement,
   payUpkeep,
@@ -682,7 +684,11 @@ function finalizeTick(ctx: SimContext) {
     if (own.length === 0) {
       civ.status = "collapsed";
       civ.capitalSettlementId = null;
-    } else if (!own.some((s) => s.id === civ.capitalSettlementId)) {
+      recordCivilizationCollapse(ctx, civ);
+      continue;
+    }
+    updateCivilizationForm(ctx, civ);
+    if (!own.some((s) => s.id === civ.capitalSettlementId)) {
       civ.capitalSettlementId = own.reduce((best, s) => (s.population > best.population ? s : best)).id;
     }
   }
