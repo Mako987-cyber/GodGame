@@ -10,13 +10,17 @@ import {
   updateGovernment,
   updateStability,
 } from "./culture";
+import { updateAgreements } from "./agreements";
+import { beliefContextOf, beliefEffects, updateBeliefs, type BeliefContext } from "./belief";
+import { chooseCrisisResponse, computeResilience, overallResilience, resilienceInputOf } from "./resilience";
+import { updateSettlementHistory } from "./settlement-history";
 import { buildProfiles, updateDiplomacy } from "./diplomacy";
 import { consume, foodNeed, produce, redistributeFood } from "./economy";
 import { actor, describePlace, emitEvent } from "./events";
 import { clamp, distance, round } from "./grid";
 import { assertInvariants } from "./invariants";
 import { formatEventDescription as t, peoplePhrase } from "./language/format";
-import { ensureLeader, tryCoup, updateLeaderStanding } from "./leadership";
+import { endDynasty, ensureLeader, tryCoup, updateLeaderStanding } from "./leadership";
 import { joinNearbyGroup, migrateBand, splitBand } from "./migration";
 import { updateFusions } from "./fusion";
 import { cleanupPolitics, updatePolitics } from "./politics";
@@ -43,6 +47,8 @@ import {
   checkCollapse,
   foundSettlement,
   payUpkeep,
+  reviveSettlement,
+  ruinsAt,
   progressConstruction,
   trySecession,
   trySpawnDaughter,
@@ -371,7 +377,10 @@ export function runTick(ctx: SimContext) {
   // 10. Settlements: foundation, construction, upkeep, colonies, collapse.
   for (const c of ctx.communities) {
     if (c.kind === "band" && c.tribe.status !== "extinct" && canFoundSettlement(ctx, c)) {
-      const s = foundSettlement(ctx, c);
+      // A band that stops where a town once stood moves back into it instead of founding a
+      // second one beside the ruins: same name, same founding year, one more reconstruction.
+      const ruins = ruinsAt(ctx, c.x, c.y);
+      const s = ruins ? reviveSettlement(ctx, c, ruins) : foundSettlement(ctx, c);
       c.kind = "settlement";
       c.settlement = s;
       c.stock = s.stock;
@@ -412,10 +421,29 @@ export function runTick(ctx: SimContext) {
   // 12. Culture, government and internal stability.
   updateSociety(ctx);
 
+  // 12a. How well each people would take a blow, recomputed from what it actually has.
+  for (const tribe of tribesAlive(ctx)) {
+    const comms = ctx.communities.filter((c) => c.tribe.id === tribe.id);
+    if (comms.length === 0) continue;
+    tribe.resilience = computeResilience(tribe, resilienceInputOf(ctx, tribe, comms), state.tick);
+  }
+
+  // 12b. Systems of belief: they appear, take hold, blend and fade (belief.ts).
+  const beliefContexts = new Map<string, BeliefContext>();
+  for (const tribe of tribesAlive(ctx)) {
+    const comms = ctx.communities.filter((c) => c.tribe.id === tribe.id);
+    if (comms.length === 0) continue;
+    const atWar = state.relationships.some((r) => r.atWar && (r.aId === tribe.id || r.bId === tribe.id));
+    beliefContexts.set(tribe.id, beliefContextOf(ctx, tribe, comms, atWar));
+  }
+  updateBeliefs(ctx, beliefContexts);
+
   // 13-14. Relations: trade, knowledge, raids, wars, peace.
   computeThreat(ctx);
   const profiles = buildProfiles(ctx);
   updateDiplomacy(ctx, profiles);
+  // 13b. Explicit pacts and the record each people builds by keeping or breaking them.
+  updateAgreements(ctx, profiles);
   // 14b. Explicit political relations: occupations and vassals (politics.ts).
   updatePolitics(ctx, profiles);
   // 14c. Peoples bound for decades by alliance or integration may fuse (fusion.ts).
@@ -431,6 +459,7 @@ export function runTick(ctx: SimContext) {
 function updateSociety(ctx: SimContext) {
   const { state } = ctx;
   const config = state.config.society;
+  const beliefs = new Map(state.beliefs.map((b) => [b.id, b]));
   // Births of the year per tribe: one pass, then O(1) per tribe.
   const birthsByTribe = new Map<string, number>();
   for (const p of state.people) {
@@ -479,6 +508,7 @@ function updateSociety(ctx: SimContext) {
         // A group that grows too fast strains its own cohesion.
         growthRate: clamp((birthsByTribe.get(tribe.id) ?? 0) / Math.max(1, members.length), 0, 1),
         culturalStrain,
+        belief: beliefEffects(tribe, beliefs),
       },
       config.stabilityInertia,
     );
@@ -493,8 +523,17 @@ function updateSociety(ctx: SimContext) {
         discovery,
         expansion: clamp(settlementsOwned.length / 4),
         complexity: clamp(members.length / 400 + settlementsOwned.length / 6),
+        // How much of its life this people spends next to peoples unlike it.
+        contact: clamp(
+          neighbours.length === 0
+            ? 0
+            : neighbours.reduce((acc, r) => acc + (r.atWar ? 0 : 1 - r.hostility), 0) / neighbours.length,
+        ),
+        belief: clamp(tribe.beliefSystemId ? (tribe.beliefAdherence ?? 0) : 0),
       },
       config.cultureDrift,
+      state.seed,
+      { tick: state.tick, year: state.year },
     );
 
     updateGovernment(
@@ -539,6 +578,31 @@ function famineEvent(ctx: SimContext, c: Community) {
   if (hazards.some((h) => h.kind === "drought")) causes.push("la siccità");
   if (ctx.state.climate.harshWinter) causes.push("l'inverno rigidissimo");
   if (c.threat >= 1) causes.push("la guerra");
+  const profile = c.tribe.resilience;
+  const overall = profile ? overallResilience(profile) : null;
+  const rels = ctx.state.relationships.filter((r) => r.aId === c.tribe.id || r.bId === c.tribe.id);
+  const response = profile
+    ? chooseCrisisResponse(c.tribe, profile, {
+        severity: clamp(1 - c.foodRatio),
+        friendlyNeighbours: rels.filter((r) => !r.atWar && r.hostility < 0.4 && r.distance <= 12).length,
+        // A neighbour close enough and weak enough that taking its land would solve this.
+        weakerNeighbour: rels.some((r) => {
+          if (r.atWar || r.distance > 10) return false;
+          const otherId = r.aId === c.tribe.id ? r.bId : r.aId;
+          const other = ctx.tribes.get(otherId);
+          if (!other || other.status === "extinct") return false;
+          const mine = ctx.state.people.reduce(
+            (acc, p) => acc + (p.alive && p.tribeId === c.tribe.id ? 1 : 0),
+            0,
+          );
+          const theirs = ctx.state.people.reduce(
+            (acc, p) => acc + (p.alive && p.tribeId === otherId ? 1 : 0),
+            0,
+          );
+          return theirs > 0 && mine > theirs * 1.4;
+        }),
+      })
+    : null;
   emitEvent(ctx, {
     type: "famine",
     subtype: hazards[0]?.kind ?? "shortage",
@@ -565,6 +629,17 @@ function famineEvent(ctx: SimContext, c: Community) {
       climateModifier: ctx.state.climate.modifier,
       harshWinter: ctx.state.climate.harshWinter,
       hazards: hazards.map((h) => h.kind).join(","),
+      // What this people will actually do about it, and why: read from its resilience, not
+      // from a mood. A group with full granaries rations; one with nowhere to go and nothing
+      // to eat leaves.
+      ...(response
+        ? {
+            response: response.response,
+            responseReason: response.reason,
+            responseScore: response.score,
+            resilience: overall,
+          }
+        : {}),
     },
     causeEventIds: hazards.map((h) => h.eventId).filter((id): id is string => Boolean(id)),
   });
@@ -588,6 +663,17 @@ function refreshSettlements(ctx: SimContext) {
   for (const p of ctx.state.people) {
     if (p.alive && p.settlementId) counts.set(p.settlementId, (counts.get(p.settlementId) ?? 0) + 1);
   }
+  // Which places are capitals, and which are held by someone else, read once for all of them.
+  const capitals = new Set(
+    ctx.state.civilizations
+      .filter((c) => c.status === "active" && c.capitalSettlementId)
+      .map((c) => c.capitalSettlementId as string),
+  );
+  const occupied = new Set(
+    ctx.state.occupations
+      .filter((o) => o.status === "active" && o.occupiedSettlementId)
+      .map((o) => o.occupiedSettlementId as string),
+  );
   for (const s of ctx.state.settlements) {
     if (s.status !== "active") {
       s.population = 0;
@@ -596,6 +682,10 @@ function refreshSettlements(ctx: SimContext) {
     const tribe = ctx.tribes.get(s.tribeId);
     if (!tribe) continue;
     updateSettlementStats(ctx, s, counts.get(s.id) ?? 0, tribe, tribeEffects(tribe));
+    updateSettlementHistory(ctx, s, workArea(ctx.state, s.x, s.y, s.territoryRadius), {
+      isCapital: capitals.has(s.id),
+      occupied: occupied.has(s.id),
+    });
   }
 }
 
@@ -626,7 +716,9 @@ function finalizeTick(ctx: SimContext) {
       tribe.extinctYear = state.year;
       tribe.leaderId = null;
       for (const d of state.dynasties) {
-        if (d.tribeId === tribe.id && d.endedYear === null) d.endedYear = state.year;
+        if (d.tribeId === tribe.id && d.endedYear === null) {
+          endDynasty(ctx, tribe, d, tribe.absorbedByTribeId ? "merged" : "extinct_people");
+        }
       }
       emitEvent(ctx, {
         type: "tribe_extinct",
@@ -653,6 +745,9 @@ function finalizeTick(ctx: SimContext) {
           rel.warStartYear = null;
           rel.status = "unknown";
           rel.phase = "peace";
+          // A truce with a people that no longer exists is void: left behind, it would keep
+          // the relationship labelled with a pause in a war nobody can resume.
+          rel.truceUntilYear = null;
         }
       }
       continue;

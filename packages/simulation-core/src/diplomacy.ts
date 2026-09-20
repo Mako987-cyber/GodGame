@@ -3,6 +3,8 @@ import { agree } from "./language/italian";
 import { formatEventDescription as t, polityPhrase } from "./language/format";
 import type { Community, SimContext } from "./context";
 import { isUnderEpidemic } from "./crises";
+import { activeAgreements, hasAgreement, reputationOf, violateAgreement } from "./agreements";
+import { beliefDistance } from "./belief";
 import { culturalDistance } from "./culture";
 import { exchangeGoods } from "./economy";
 import { actor, emitEvent } from "./events";
@@ -10,7 +12,7 @@ import { clamp, distance, round } from "./grid";
 import { areaDeposits } from "./resources";
 import { getResourceAmount } from "./stock";
 import { shareKnowledge, tribeEffects } from "./technology";
-import type { ConflictPhase, DiplomaticStatus, Relationship, Tribe } from "./types";
+import type { BeliefSystem, ConflictPhase, DiplomaticStatus, Relationship, Tribe } from "./types";
 import { imposePeaceTerms, vassalBond } from "./politics";
 import { combatSide, sidePower, wageConflict } from "./warfare";
 
@@ -125,7 +127,18 @@ function allyBonus(
  * borders and past interactions; each pair then takes at most one action per year.
  */
 export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProfile>) {
+  const beliefs = new Map(ctx.state.beliefs.map((b) => [b.id, b]));
   const { state } = ctx;
+  // A truce runs out because the years passed, not because someone looked at the pair. Two
+  // peoples that have drifted apart are never evaluated again, and used to keep a truce that
+  // had expired centuries earlier.
+  for (const rel of state.relationships) {
+    if (rel.truceUntilYear !== null && state.year >= rel.truceUntilYear) {
+      rel.truceUntilYear = null;
+      if (rel.phase === "truce" && !rel.atWar) rel.phase = "peace";
+      if (rel.status === "truce") rel.status = "neutral";
+    }
+  }
   const byKey = new Map(state.relationships.map((r) => [r.id, r]));
   const list = [...profiles.values()].sort((a, b) => a.tribe.seq - b.tribe.seq);
 
@@ -190,7 +203,7 @@ export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProf
       }
       rel.distance = pair.d;
       const phaseBefore = rel.phase;
-      updateRelationValues(rel, a, b, pair.d);
+      updateRelationValues(rel, a, b, pair.d, beliefs);
       if (pair.d > CONTACT_DISTANCE && !rel.atWar) {
         updateStatus(rel, state.year, phaseBefore);
         // Explicit political bonds are visible in diplomacy (unless the pair is at war).
@@ -236,7 +249,34 @@ function occupies(state: SimContext["state"], aId: string, bId: string): boolean
   );
 }
 
-function updateRelationValues(rel: Relationship, a: TribeProfile, b: TribeProfile, d: number) {
+/**
+ * How freely knowledge moves between two peoples, as a multiplier on the contact intensity.
+ *
+ * A signed exchange of knowledge opens the workshops; an embargo shuts them. Beyond that, a
+ * people does not show its craft to someone known for tearing up what it signs — nor to one it
+ * considers dangerous.
+ */
+export function knowledgeOpenness(ctx: SimContext, a: Tribe, b: Tribe): number {
+  let factor = 1;
+  if (hasAgreement(ctx, a.id, b.id, "technology_exchange")) factor += 1.2;
+  if (hasAgreement(ctx, a.id, b.id, "trade")) factor += 0.25;
+  if (hasAgreement(ctx, a.id, b.id, "military_alliance")) factor += 0.3;
+  if (hasAgreement(ctx, a.id, b.id, "embargo")) factor -= 0.8;
+  const repA = reputationOf(ctx, a.id);
+  const repB = reputationOf(ctx, b.id);
+  // Reputation is symmetric here: what matters is how guarded the pair is with each other.
+  const respect = (repA.treatyRespect + repB.treatyRespect) / 2;
+  const threat = Math.max(repA.threatLevel, repB.threatLevel);
+  return round(clamp(factor * (0.55 + respect * 0.6) * (1 - threat * 0.3), 0, 3), 3);
+}
+
+function updateRelationValues(
+  rel: Relationship,
+  a: TribeProfile,
+  b: TribeProfile,
+  d: number,
+  beliefs: ReadonlyMap<string, BeliefSystem>,
+) {
   const inContact = d <= CONTACT_DISTANCE;
   const border = d <= 5 ? 1 : d <= 8 ? 0.5 : 0;
   const scarcity = Math.max(a.scarcity, b.scarcity);
@@ -249,8 +289,16 @@ function updateRelationValues(rel: Relationship, a: TribeProfile, b: TribeProfil
     (b.hasCopperAccess && !a.hasCopperAccess && a.tribe.techs.includes("copper_working"))
       ? 1
       : 0;
-  // Cultures that are far apart trust each other less and clash more easily.
-  rel.culturalDistance = culturalDistance(a.tribe.culture, b.tribe.culture);
+  // Cultures that are far apart trust each other less and clash more easily. What the two
+  // peoples believe counts as part of that distance: two intolerant, missionary cults make
+  // neighbours out of strangers much harder than two quiet ones.
+  rel.culturalDistance = round(
+    clamp(
+      culturalDistance(a.tribe.culture, b.tribe.culture) * 0.75 +
+        beliefDistance(a.tribe, b.tribe, beliefs) * 0.25,
+    ),
+    3,
+  );
   const militarism = (a.tribe.culture.militarism + b.tribe.culture.militarism) / 200;
   const openness = (a.tribe.culture.tradeOpenness + b.tribe.culture.tradeOpenness) / 200;
   if (inContact) {
@@ -393,8 +441,8 @@ function decideAction(
   const bound = vassalBond(state, a.tribe.id, b.tribe.id) !== undefined;
 
   // --- Escalation ladder: tension → demand → threat → war -------------------
+  // Expiry itself is handled once per tick for every pair, at the top of `updateDiplomacy`.
   const truceHolds = rel.truceUntilYear !== null && state.year < rel.truceUntilYear;
-  if (!truceHolds && rel.truceUntilYear !== null) rel.truceUntilYear = null;
   if (!truceHolds && !bound) {
     if (warScore > 0.3 && rel.phase === "peace") {
       rel.phase = "tension";
@@ -483,6 +531,12 @@ function decideAction(
     rel.phase = "war";
     rel.warStartYear = state.year;
     rel.allied = false;
+    // Attacking someone you had a pact with is exactly what a reputation is made of: every
+    // standing pact between the pair is broken, and it goes on the attacker's record.
+    for (const agreement of activeAgreements(ctx, att.tribe.id, def.tribe.id)) {
+      if (agreement.type === "embargo" || agreement.type === "tribute") continue;
+      violateAgreement(ctx, agreement, att.tribe.id, "ha attaccato chi aveva firmato con lei");
+    }
     const reasons: string[] = [];
     if (att.scarcity > 0.3) reasons.push("dalla fame");
     if (att.crowding > 0.6) reasons.push("dalla fame di terre");
@@ -625,13 +679,15 @@ function decideAction(
         pair.ca.settlement.roadLinks.includes(pair.cb.settlement.id)
           ? 0.03
           : 0;
-      shareKnowledge(ctx, a.tribe, b.tribe, 0.04 + roads);
-      shareKnowledge(ctx, b.tribe, a.tribe, 0.04 + roads);
+      const openness = knowledgeOpenness(ctx, a.tribe, b.tribe);
+      shareKnowledge(ctx, a.tribe, b.tribe, (0.04 + roads) * openness);
+      shareKnowledge(ctx, b.tribe, a.tribe, (0.04 + roads) * openness);
     }
   } else if (pair.d <= 6 && rel.hostility < 0.4) {
     // Living side by side spreads know-how slowly even without formal trade.
-    shareKnowledge(ctx, a.tribe, b.tribe, 0.012);
-    shareKnowledge(ctx, b.tribe, a.tribe, 0.012);
+    const openness = knowledgeOpenness(ctx, a.tribe, b.tribe);
+    shareKnowledge(ctx, a.tribe, b.tribe, 0.012 * openness);
+    shareKnowledge(ctx, b.tribe, a.tribe, 0.012 * openness);
   }
 
   if (!rel.allied && rel.trust > 0.7 && rel.hostility < 0.1 && rng.chance(0.1)) {

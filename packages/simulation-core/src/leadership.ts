@@ -5,7 +5,7 @@ import { clamp, round } from "./grid";
 import { identityOf } from "./identity/composite";
 import { formatEventDescription as t, formatLeaderTitle, peoplePhrase } from "./language/format";
 import { dynastyName } from "./names";
-import type { Dynasty, Person, Tribe } from "./types";
+import type { Dynasty, DynastyEndReason, Person, SuccessionLaw, SuccessionOutcome, Tribe } from "./types";
 
 /**
  * Leadership, dynasties and succession.
@@ -15,6 +15,89 @@ import type { Dynasty, Person, Tribe } from "./types";
  * depending on the form of government. Succession happens on death, on incapacity and
  * when legitimacy collapses.
  */
+
+/** Youngest age at which an heir can rule in their own name; below it a regency is needed. */
+export const MAJORITY_AGE = 20;
+
+/**
+ * The rule a people follows to choose its next ruler, read from the form of government it has.
+ * A house founded under a monarchy keeps its law until the government itself changes.
+ */
+export function successionLawOf(tribe: Tribe): SuccessionLaw {
+  switch (GOVERNMENTS[tribe.government].succession) {
+    case "hereditary":
+      return "hereditary";
+    case "election":
+      return "elective";
+    case "seniority":
+      return "council";
+    case "strength":
+      return "military";
+    default:
+      return tribe.culture.spirituality >= 70 ? "religious" : "meritocratic";
+  }
+}
+
+export const SUCCESSION_LAW_LABELS: Record<SuccessionLaw, string> = {
+  hereditary: "ereditaria",
+  elective: "elettiva",
+  council: "per consiglio",
+  military: "militare",
+  religious: "religiosa",
+  meritocratic: "per merito",
+};
+
+export const SUCCESSION_OUTCOME_LABELS: Record<SuccessionOutcome, string> = {
+  peaceful: "pacifica",
+  regency: "reggenza",
+  disputed: "contesa",
+  usurpation: "usurpazione",
+  interregnum: "interregno",
+};
+
+/** Everything that can turn a handover of power into a crisis. Each term is 0..1. */
+export interface SuccessionRiskInput {
+  /** Eligible claimants of the ruling house. */
+  heirs: number;
+  /** Claimants whose standing is close enough to the first to contest him. */
+  rivals: number;
+  /** The designated heir is below `MAJORITY_AGE`. */
+  minorHeir: boolean;
+  /** The ruler died before old age: nothing had been arranged. */
+  suddenDeath: boolean;
+  /** Legitimacy of the ruling house, 0..1. */
+  dynastyLegitimacy: number;
+  /** Legitimacy of the people's institutions, 0..1. */
+  legitimacy: number;
+  /** How far power is concentrated, 0..1: a scattered people has more claimants. */
+  centralization: number;
+  /** Vassals that could take the chance to break away, 0..1. */
+  vassalPressure: number;
+}
+
+/**
+ * Probability that a succession goes wrong, 0..1. Pure function: the same situation always
+ * produces the same risk, and a strong house with one clear heir is never at risk.
+ */
+export function successionCrisisRisk(input: SuccessionRiskInput): number {
+  if (input.heirs === 0) return 1;
+  const contested = Math.min(0.35, Math.max(0, input.rivals) * 0.18);
+  const weakHouse = Math.max(0, 0.7 - input.dynastyLegitimacy) * 0.5;
+  const weakState = Math.max(0, 0.6 - input.legitimacy) * 0.55;
+  const scattered = Math.max(0, 0.45 - input.centralization) * 0.35;
+  return round(
+    clamp(
+      contested +
+        weakHouse +
+        weakState +
+        scattered +
+        (input.minorHeir ? 0.25 : 0) +
+        (input.suddenDeath ? 0.15 : 0) +
+        input.vassalPressure * 0.2,
+    ),
+    3,
+  );
+}
 
 export function isEligibleLeader(p: Person): boolean {
   return p.alive && p.age >= 20 && p.age < 70 && p.health >= 0.35;
@@ -92,6 +175,27 @@ export function heirsOf(ctx: SimContext, leader: Person, members: Person[]): Per
     .sort((a, b) => b.prestige - a.prestige || b.age - a.age || a.seq - b.seq);
 }
 
+/** Smallest group whose leadership is worth turning into a heritable claim. */
+export const DYNASTY_MIN_POPULATION = 60;
+
+/**
+ * Whether a chief can make his command heritable. Without this a people could never reach a
+ * monarchy at all: that form of government requires a ruling house, and a ruling house used to
+ * require that very form of government.
+ */
+export function canFoundDynasty(ctx: SimContext, tribe: Tribe, leader: Person): boolean {
+  if (leader.prestige < 0.5) return false;
+  if (tribe.culture.hierarchy < 45 || tribe.culture.centralization < 40) return false;
+  if (tribe.stability.legitimacy < 0.45) return false;
+  const population = ctx.state.people.reduce(
+    (acc, p) => acc + (p.alive && p.tribeId === tribe.id ? 1 : 0),
+    0,
+  );
+  if (population < DYNASTY_MIN_POPULATION) return false;
+  // Children to pass it on to: a claim with nobody behind it is not a house.
+  return ctx.state.people.some((p) => p.alive && (p.motherId === leader.id || p.fatherId === leader.id));
+}
+
 export function ensureDynasty(ctx: SimContext, tribe: Tribe, leader: Person): Dynasty | null {
   if (leader.dynastyId) {
     const existing = ctx.state.dynasties.find((d) => d.id === leader.dynastyId);
@@ -102,6 +206,9 @@ export function ensureDynasty(ctx: SimContext, tribe: Tribe, leader: Person): Dy
   }
   const gov = GOVERNMENTS[tribe.government];
   if (gov.succession !== "hereditary" && tribe.government !== "chiefdom") return null;
+  // A chief only turns his household into a ruling house when there is something to pass on:
+  // a group large enough to be worth inheriting, and the standing to make the claim stick.
+  if (gov.succession !== "hereditary" && !canFoundDynasty(ctx, tribe, leader)) return null;
   const { id, seq } = nextId(ctx.state, "dynasty", "dy");
   const dynasty: Dynasty = {
     id,
@@ -113,6 +220,12 @@ export function ensureDynasty(ctx: SimContext, tribe: Tribe, leader: Person): Dy
     endedYear: null,
     prestige: round(clamp(leader.prestige)),
     rulers: 1,
+    currentLeaderId: leader.id,
+    legitimacy: round(clamp(0.45 + leader.prestige * 0.3 + tribe.stability.legitimacy * 0.25), 3),
+    successionLaw: successionLawOf(tribe),
+    status: "active",
+    endReason: null,
+    crises: 0,
   };
   ctx.state.dynasties.push(dynasty);
   leader.dynastyId = id;
@@ -145,6 +258,7 @@ function installLeader(
   leader: Person,
   reason: "succession" | "foundation" | "coup" | "election",
   previous: Person | null,
+  outcome: SuccessionOutcome = "peaceful",
 ) {
   tribe.leaderId = leader.id;
   tribe.lastLeaderChangeYear = ctx.state.year;
@@ -154,11 +268,19 @@ function installLeader(
   leader.titleSinceYear = ctx.state.year;
   leader.prestige = round(clamp(leader.prestige + 0.15));
   const dynasty = leader.dynastyId ? ctx.state.dynasties.find((d) => d.id === leader.dynastyId) : null;
-  if (dynasty && dynasty.tribeId === tribe.id) {
+  if (dynasty && dynasty.tribeId === tribe.id && dynasty.endedYear !== null && reason !== "coup") {
+    restoreDynasty(ctx, tribe, dynasty, leader);
+  }
+  if (dynasty && dynasty.tribeId === tribe.id && dynasty.endedYear === null) {
     dynasty.rulers += 1;
     dynasty.prestige = round(clamp(dynasty.prestige + 0.05));
+    dynasty.currentLeaderId = leader.id;
+    // An undisputed handover restores a little of what troubled ones cost the house.
+    dynasty.legitimacy = round(clamp(dynasty.legitimacy + (outcome === "peaceful" ? 0.04 : 0)), 3);
+    // The law follows the government: a house can outlive the rule that created it.
+    dynasty.successionLaw = successionLawOf(tribe);
     tribe.dynastyId = dynasty.id;
-  } else if (GOVERNMENTS[tribe.government].succession === "hereditary") {
+  } else if (GOVERNMENTS[tribe.government].succession === "hereditary" || tribe.government === "chiefdom") {
     ensureDynasty(ctx, tribe, leader);
   }
 
@@ -207,6 +329,8 @@ function installLeader(
       prestige: leader.prestige,
       dynastyId: leader.dynastyId,
       reason,
+      outcome,
+      successionLaw: successionLawOf(tribe),
     },
   });
 }
@@ -227,11 +351,11 @@ export function ensureLeader(ctx: SimContext, tribe: Tribe, members: Person[]) {
     if (!incapable) return;
     const candidates = members.filter((p) => isEligibleLeader(p) && p.id !== current.id);
     if (candidates.length === 0) return;
-    const heir = pickSuccessor(ctx, tribe, current, candidates, context);
-    if (!heir) return;
+    const chosen = pickSuccessor(ctx, tribe, current, candidates, context);
+    if (!chosen) return;
     current.title = "elder";
     tribe.stability.legitimacy = clamp(tribe.stability.legitimacy - 0.05);
-    installLeader(ctx, tribe, heir, "succession", current);
+    installLeader(ctx, tribe, chosen.leader, "succession", current, chosen.outcome);
     return;
   }
 
@@ -246,30 +370,75 @@ export function ensureLeader(ctx: SimContext, tribe: Tribe, members: Person[]) {
     tribe.leaderId = null;
     return;
   }
-  installLeader(ctx, tribe, successor, previous ? "succession" : "foundation", previous);
+  installLeader(
+    ctx,
+    tribe,
+    successor.leader,
+    previous ? "succession" : "foundation",
+    previous,
+    successor.outcome,
+  );
 }
 
-function pickSuccessor(
+/**
+ * Vassals that could use the handover to break away, 0..1. A people with no vassals feels no
+ * such pressure; a lord whose vassals are already restless feels a lot of it.
+ */
+function vassalPressure(ctx: SimContext, tribe: Tribe): number {
+  const bonds = ctx.state.vassalages.filter(
+    (v) => v.overlordCivilizationId === tribe.id && v.endedAtTick === null,
+  );
+  if (bonds.length === 0) return 0;
+  const restless = bonds.reduce((acc, v) => acc + (v.diplomaticStatus === "rebellion" ? 1 : v.autonomy), 0);
+  return round(clamp(restless / bonds.length), 3);
+}
+
+/** Everything the succession needs to know about the moment the previous ruler left. */
+export function successionSituation(
   ctx: SimContext,
   tribe: Tribe,
-  previous: Person | null,
+  previous: Person,
+  candidates: Person[],
+  dynasty: Dynasty | null,
+): { heirs: Person[]; minor: Person | null; risk: SuccessionRiskInput } {
+  const heirs = heirsOf(ctx, previous, candidates);
+  // Children who would inherit but are still too young to rule in their own name.
+  const minor =
+    ctx.state.people.find(
+      (p) =>
+        p.alive &&
+        p.tribeId === tribe.id &&
+        p.age < MAJORITY_AGE &&
+        (p.motherId === previous.id || p.fatherId === previous.id),
+    ) ?? null;
+  const first = heirs[0];
+  const rivals = first
+    ? heirs.filter((p) => p.id !== first.id && p.prestige >= first.prestige * 0.85).length
+    : candidates.filter((p) => p.prestige >= (candidates[0]?.prestige ?? 0) * 0.85).length - 1;
+  return {
+    heirs,
+    minor,
+    risk: {
+      heirs: heirs.length,
+      rivals: Math.max(0, rivals),
+      minorHeir: heirs.length === 0 && minor !== null,
+      // A ruler who died before the elder years left nothing arranged.
+      suddenDeath: !previous.alive && previous.age < AGE.elder,
+      dynastyLegitimacy: dynasty?.legitimacy ?? 0.5,
+      legitimacy: tribe.stability.legitimacy,
+      centralization: tribe.culture.centralization / 100,
+      vassalPressure: vassalPressure(ctx, tribe),
+    },
+  };
+}
+
+/** Best candidate by the rule the people actually follows. */
+function bestCandidate(
+  ctx: SimContext,
+  tribe: Tribe,
   candidates: Person[],
   context: { maxWealth: number; dynasties: Map<string, Dynasty> },
 ): Person | null {
-  if (candidates.length === 0) return null;
-  const gov = GOVERNMENTS[tribe.government];
-  if (gov.succession === "hereditary" && previous) {
-    const heirs = heirsOf(ctx, previous, candidates);
-    if (heirs.length > 0) {
-      const heir = heirs[0];
-      if (heir) {
-        heir.dynastyId ??= previous.dynastyId;
-        return heir;
-      }
-    }
-    // No heir: the dynasty is in trouble and the group risks a succession crisis.
-    successionCrisis(ctx, tribe, previous);
-  }
   let best: Person | null = null;
   let bestScore = -Infinity;
   for (const p of candidates) {
@@ -282,24 +451,219 @@ function pickSuccessor(
   return best;
 }
 
-function successionCrisis(ctx: SimContext, tribe: Tribe, previous: Person) {
-  tribe.stability.legitimacy = clamp(tribe.stability.legitimacy - 0.2);
-  tribe.stability.tension = clamp(tribe.stability.tension + 0.2);
-  const dynasty = tribe.dynastyId ? ctx.state.dynasties.find((d) => d.id === tribe.dynastyId) : null;
-  if (dynasty) {
-    dynasty.endedYear = ctx.state.year;
-    tribe.dynastyId = null;
+/**
+ * Who rules next, and how the handover went.
+ *
+ * A clear heir in a solid house simply inherits. Everything else — several claimants, a child
+ * in the line, a discredited house, restless vassals — raises the risk that the handover turns
+ * into a regency, a contested throne or an outright usurpation. The house pays for each of them
+ * in legitimacy, and when the line runs out the house ends.
+ */
+function pickSuccessor(
+  ctx: SimContext,
+  tribe: Tribe,
+  previous: Person | null,
+  candidates: Person[],
+  context: { maxWealth: number; dynasties: Map<string, Dynasty> },
+): { leader: Person; outcome: SuccessionOutcome } | null {
+  if (candidates.length === 0) return null;
+  const dynasty = tribe.dynastyId ? (context.dynasties.get(tribe.dynastyId) ?? null) : null;
+  const house = dynasty && dynasty.endedYear === null ? dynasty : null;
+
+  // Without a ruling house there is nothing to inherit and nothing to contest: the group simply
+  // picks the person its form of government points to.
+  if (!house || !previous) {
+    const chosen = bestCandidate(ctx, tribe, candidates, context);
+    return chosen ? { leader: chosen, outcome: "peaceful" } : null;
   }
+
+  const situation = successionSituation(ctx, tribe, previous, candidates, house);
+  const risk = successionCrisisRisk(situation.risk);
+  const troubled = ctx.rng.chance(risk);
+
+  if (situation.heirs.length === 0) {
+    // The line has run out: the house ends here, whoever takes its place.
+    endDynasty(ctx, tribe, house, "no_heir");
+    successionCrisis(ctx, tribe, previous, "interregnum", risk, situation.risk);
+    const chosen = bestCandidate(ctx, tribe, candidates, context);
+    return chosen ? { leader: chosen, outcome: "interregnum" } : null;
+  }
+
+  const heir = situation.heirs[0] as Person;
+  if (!troubled) {
+    heir.dynastyId ??= previous.dynastyId;
+    return { leader: heir, outcome: "peaceful" };
+  }
+
+  // A troubled handover: a regency while the heir grows up, a contested throne among the
+  // claimants of the house, or an outsider taking it altogether.
+  const outsider = bestCandidate(
+    ctx,
+    tribe,
+    candidates.filter((p) => !situation.heirs.some((h) => h.id === p.id)),
+    context,
+  );
+  const usurped = outsider !== null && ctx.rng.chance(clamp(risk * 0.55));
+  const outcome: SuccessionOutcome = usurped
+    ? "usurpation"
+    : situation.risk.minorHeir || situation.heirs[0]!.age < MAJORITY_AGE + 3
+      ? "regency"
+      : "disputed";
+  const leader = usurped ? (outsider as Person) : heir;
+  if (!usurped) leader.dynastyId ??= previous.dynastyId;
+  if (usurped) {
+    endDynasty(ctx, tribe, house, "usurpation");
+  } else {
+    house.legitimacy = round(clamp(house.legitimacy - (outcome === "disputed" ? 0.15 : 0.08)), 3);
+    house.crises += 1;
+  }
+  successionCrisis(ctx, tribe, previous, outcome, risk, situation.risk);
+  return { leader, outcome };
+}
+
+/**
+ * Closes a ruling house without erasing it: the record keeps its name, its founder, the years
+ * it ruled, how many rulers it gave and why it ended.
+ */
+export function endDynasty(
+  ctx: SimContext,
+  tribe: Tribe,
+  dynasty: Dynasty | null,
+  reason: DynastyEndReason,
+): boolean {
+  if (!dynasty || dynasty.endedYear !== null) return false;
+  dynasty.endedYear = ctx.state.year;
+  dynasty.currentLeaderId = null;
+  dynasty.status = reason === "usurpation" ? "overthrown" : reason === "merged" ? "merged" : "extinct";
+  dynasty.endReason = reason;
+  if (tribe.dynastyId === dynasty.id) tribe.dynastyId = null;
+  const why =
+    reason === "no_heir"
+      ? "senza più eredi riconosciuti"
+      : reason === "usurpation"
+        ? "spodestata da chi non le apparteneva"
+        : reason === "extinct_people"
+          ? "con il popolo che governava"
+          : reason === "merged"
+            ? "confluita in un altro popolo"
+            : "perché il potere non si trasmette più per sangue";
+  emitEvent(ctx, {
+    type: "leadership",
+    subtype: "dynasty_ended",
+    importance: 4,
+    actors: [actor.tribe(tribe), { kind: "dynasty", id: dynasty.id, name: dynasty.name }],
+    x: tribe.x,
+    y: tribe.y,
+    title: `Finisce la ${dynasty.name}`,
+    description: t(
+      "Dopo {years} anni e {rulers}, la {dynasty} lascia il potere presso {art:people}, {why}.",
+      {
+        years: ctx.state.year - dynasty.foundedYear,
+        rulers: dynasty.rulers === 1 ? "un solo sovrano" : `${dynasty.rulers} sovrani`,
+        dynasty: dynasty.name,
+        people: peoplePhrase(tribe),
+        why,
+      },
+    ),
+    metadata: {
+      dynastyId: dynasty.id,
+      foundedYear: dynasty.foundedYear,
+      endedYear: dynasty.endedYear,
+      rulers: dynasty.rulers,
+      crises: dynasty.crises,
+      reason,
+      status: dynasty.status,
+    },
+  });
+  return true;
+}
+
+/**
+ * A house that had lost the seat takes it back through one of its descendants. The years it
+ * spent out of power are kept in the record: a restoration is a second chapter, not a new house.
+ */
+export function restoreDynasty(ctx: SimContext, tribe: Tribe, dynasty: Dynasty, leader: Person): boolean {
+  if (dynasty.endedYear === null) return false;
+  // A house nobody remembers, or one the people threw out yesterday, does not simply return.
+  const away = ctx.state.year - dynasty.endedYear;
+  if (away < 10) return false;
+  if (GOVERNMENTS[tribe.government].succession !== "hereditary") return false;
+  const interruption = dynasty.endedYear;
+  dynasty.endedYear = null;
+  dynasty.status = "active";
+  dynasty.endReason = null;
+  dynasty.currentLeaderId = leader.id;
+  dynasty.legitimacy = round(clamp(dynasty.legitimacy * 0.6 + leader.prestige * 0.3), 3);
+  tribe.dynastyId = dynasty.id;
+  emitEvent(ctx, {
+    type: "leadership",
+    subtype: "dynasty_restored",
+    importance: 4,
+    actors: [
+      actor.person(leader),
+      actor.tribe(tribe),
+      { kind: "dynasty", id: dynasty.id, name: dynasty.name },
+    ],
+    x: leader.x,
+    y: leader.y,
+    title: `Torna la ${dynasty.name}`,
+    description: t(
+      "Dopo {away} anni lontana dal potere, la {dynasty} torna alla guida {di:people}: {leader} ne discende.",
+      { away, dynasty: dynasty.name, people: peoplePhrase(tribe), leader: leader.name },
+    ),
+    metadata: {
+      dynastyId: dynasty.id,
+      interruptedYear: interruption,
+      yearsAway: away,
+      leaderId: leader.id,
+      previousRulers: dynasty.rulers,
+    },
+  });
+  return true;
+}
+
+/**
+ * Records a handover that did not go smoothly. The cost to the people depends on how it went:
+ * a regency is a pause, a contested throne a wound, an interregnum a hole in the institutions.
+ */
+function successionCrisis(
+  ctx: SimContext,
+  tribe: Tribe,
+  previous: Person,
+  outcome: SuccessionOutcome,
+  risk: number,
+  detail: SuccessionRiskInput,
+) {
+  const severity =
+    outcome === "interregnum" ? 0.6 : outcome === "usurpation" ? 0.5 : outcome === "disputed" ? 0.4 : 0.25;
+  tribe.stability.legitimacy = clamp(tribe.stability.legitimacy - severity * 0.35);
+  tribe.stability.tension = clamp(tribe.stability.tension + severity * 0.4);
   ctx.state.crises.push({
     id: `cr${(ctx.state.counters.crisis += 1)}:succession`,
     kind: "succession",
     scope: "tribe",
     targetId: tribe.id,
     startYear: ctx.state.year,
-    untilYear: ctx.state.year + 3,
-    severity: 0.5,
+    untilYear: ctx.state.year + (outcome === "regency" ? 5 : 3),
+    severity: round(severity, 2),
     eventId: null,
   });
+  const cause =
+    detail.heirs === 0
+      ? "non è rimasto nessun erede riconosciuto"
+      : detail.minorHeir
+        ? "l'erede è troppo giovane per regnare"
+        : detail.rivals > 0
+          ? `${detail.rivals + 1} pretendenti rivendicano lo stesso posto`
+          : "la casa regnante ha perso il credito che aveva";
+  const how =
+    outcome === "regency"
+      ? "il comando passa a chi custodirà il posto finché l'erede non sarà in età"
+      : outcome === "usurpation"
+        ? "il posto viene preso da chi non apparteneva alla casa"
+        : outcome === "interregnum"
+          ? "il posto resta vuoto finché il gruppo non trova un accordo"
+          : "il posto viene conteso e assegnato a fatica";
   emitEvent(ctx, {
     type: "leadership",
     subtype: "succession_crisis",
@@ -308,18 +672,24 @@ function successionCrisis(ctx: SimContext, tribe: Tribe, previous: Person) {
     x: tribe.x,
     y: tribe.y,
     title: t("Crisi di successione presso {art:people}", { people: peoplePhrase(tribe) }),
-    description: t(
-      "Alla morte di {previous} non è rimasto nessun erede riconosciuto: presso {art:people} si apre una lotta per il comando.",
-      {
-        previous: previous.name,
-        people: peoplePhrase(tribe),
-      },
-    ),
+    // The ruler may have died or merely stepped aside: the chronicle must not say otherwise.
+    description: t("{leaving} {cause}: {how}.", {
+      leaving: previous.alive ? `Al ritiro di ${previous.name}` : `Alla morte di ${previous.name}`,
+      cause,
+      how,
+    }),
     metadata: {
       previousLeaderId: previous.id,
-      dynastyId: dynasty?.id ?? null,
+      dynastyId: tribe.dynastyId,
+      outcome,
+      risk: round(risk, 3),
+      heirs: detail.heirs,
+      rivals: detail.rivals,
+      minorHeir: detail.minorHeir,
+      suddenDeath: detail.suddenDeath,
+      vassalPressure: detail.vassalPressure,
       legitimacy: tribe.stability.legitimacy,
-      cause: "nessun erede idoneo",
+      cause,
     },
   });
 }
@@ -344,6 +714,9 @@ export function tryCoup(ctx: SimContext, tribe: Tribe, members: Person[]): boole
 
   leader.title = null;
   leader.prestige = round(clamp(leader.prestige - 0.2));
+  // The house that held the seat does not survive being thrown out of it.
+  const unseated = tribe.dynastyId ? (dynasties.get(tribe.dynastyId) ?? null) : null;
+  if (unseated && rival.dynastyId !== unseated.id) endDynasty(ctx, tribe, unseated, "usurpation");
   tribe.stability.legitimacy = clamp(tribe.stability.legitimacy + 0.15);
   tribe.stability.tension = clamp(tribe.stability.tension - 0.2);
   tribe.stability.unrestYears = 0;

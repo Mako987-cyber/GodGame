@@ -119,6 +119,10 @@ export function deriveCulture(seed: string, tribeId: string): CultureTraits {
     spirituality: trait("spirituality", 50),
     innovation: trait("innovation", 45),
     expansionism: trait("expansionism", 45),
+    tolerance: trait("tolerance", 50),
+    exploration: trait("exploration", 45),
+    administrativeCapacity: trait("administration", 30),
+    culturalCohesion: trait("cohesion", 60),
   };
 }
 
@@ -139,7 +143,18 @@ export function normalizeTribe(seed: string, tribe: Tribe): Tribe {
   tribe.stock = normalizeStock(tribe.stock);
   tribe.techAdoption ??= Object.fromEntries(tribe.techs.map((id) => [id, 1]));
   for (const id of tribe.techs) tribe.techAdoption[id] ??= 1;
+  // Worlds created before technology could be lost have simply never lost any.
+  tribe.techLost ??= {};
   tribe.culture ??= deriveCulture(seed, tribe.id);
+  // Cultures saved before these four traits existed get them from the same deterministic
+  // derivation the world would have used at creation: no randomness, no migration.
+  const derived = deriveCulture(seed, tribe.id);
+  tribe.culture.tolerance ??= derived.tolerance;
+  tribe.culture.exploration ??= derived.exploration;
+  tribe.culture.administrativeCapacity ??= derived.administrativeCapacity;
+  tribe.culture.culturalCohesion ??= derived.culturalCohesion;
+  tribe.cultureHistory ??= [];
+  tribe.resilience ??= null;
   tribe.government ??= inferGovernment(tribe);
   tribe.stability ??= defaultStability();
   tribe.distribution ??= "egalitarian" satisfies DistributionPolicy;
@@ -151,7 +166,25 @@ export function normalizeTribe(seed: string, tribe: Tribe): Tribe {
   tribe.identityType ??= tribe.identityId ? "historical" : "legacy";
   tribe.absorbedIdentityIds ??= [];
   tribe.absorbedByTribeId ??= null;
+  // Worlds created before beliefs existed follow none, and start from no adherence.
+  tribe.beliefSystemId ??= null;
+  tribe.beliefAdherence ??= 0;
   return tribe;
+}
+
+/**
+ * Houses recorded before succession laws existed: the law is read back from the government the
+ * people had, the house is active unless it already had an end year, and legitimacy starts from
+ * the prestige it had earned. Nothing is invented and nothing already written is changed.
+ */
+export function normalizeDynasty(dynasty: Dynasty): Dynasty {
+  dynasty.currentLeaderId ??= null;
+  dynasty.legitimacy ??= round(clamp(0.5 + (dynasty.prestige ?? 0) * 0.4), 3);
+  dynasty.successionLaw ??= "hereditary";
+  dynasty.status ??= dynasty.endedYear === null ? "active" : "extinct";
+  dynasty.endReason ??= null;
+  dynasty.crises ??= 0;
+  return dynasty;
 }
 
 export function normalizeCivilization(civ: Civilization): Civilization {
@@ -186,6 +219,23 @@ export function normalizeSettlement(settlement: Settlement): Settlement {
   settlement.influence ??= settlement.level;
   if (settlement.founderId === undefined) settlement.founderId = null;
   if (settlement.lastEpidemicYear === undefined) settlement.lastEpidemicYear = null;
+  // A place from before this milestone remembers what its own row already proves: when it was
+  // founded, how big it is now, and that it was abandoned if it was. Nothing is invented.
+  settlement.history ??= {
+    foundingReason: "migration",
+    founderName: null,
+    specializations: [],
+    peakPopulation: settlement.population ?? 0,
+    peakYear: settlement.foundedYear,
+    destructions: settlement.status === "abandoned" ? 1 : 0,
+    reconstructions: 0,
+    occupiedYears: 0,
+    capitalPeriods: [],
+    notableEventIds: [],
+  };
+  settlement.history.specializations ??= [];
+  settlement.history.capitalPeriods ??= [];
+  settlement.history.notableEventIds ??= [];
   settlement.construction = normalizeConstruction(settlement);
   return settlement;
 }
@@ -282,6 +332,8 @@ export function normalizeCounters(counters: Partial<Counters> | undefined): Coun
     vassalage: num(counters?.vassalage, 0),
     occupation: num(counters?.occupation, 0),
     composite: num(counters?.composite, 0),
+    belief: num(counters?.belief, 0),
+    agreement: num(counters?.agreement, 0),
   };
 }
 
@@ -302,9 +354,13 @@ export function migrateState(state: WorldState): WorldState {
   state.counters = normalizeCounters(state.counters);
   state.climate = normalizeClimate(state.climate);
   state.dynasties ??= [] as Dynasty[];
+  for (const dynasty of state.dynasties) normalizeDynasty(dynasty);
   state.crises ??= [] as ActiveCrisis[];
   state.archive ??= { people: [], households: [] };
   // Worlds created before explicit political relations and fusions existed have none.
+  state.beliefs ??= [];
+  state.agreements ??= [];
+  state.reputations ??= [];
   state.vassalages ??= [];
   state.occupations ??= [];
   state.composites ??= [];

@@ -1,0 +1,1 @@
+ALTER TABLE "settlements" ADD COLUMN "history" jsonb;

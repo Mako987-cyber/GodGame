@@ -2,9 +2,11 @@ import type { DistributionPolicy, Season, SimulationConfig } from "./config";
 import type { IdentityType } from "./identity/definition";
 import type { WorldRoster } from "./identity/roster";
 import type { RngState } from "./prng";
+import type { ResilienceProfile } from "./resilience";
 import type { GoodsBag, ResourceBundle, Stockpile } from "./stock";
 
 export type { Stockpile, ResourceBundle, GoodsBag };
+export type { ResilienceProfile };
 
 export type Biome = "ocean" | "coast" | "plains" | "forest" | "hills" | "mountain" | "desert" | "tundra";
 
@@ -171,7 +173,36 @@ export interface CultureTraits {
   spirituality: number;
   innovation: number;
   expansionism: number;
+  /** How well the people lives beside those who are unlike it. */
+  tolerance: number;
+  /** How readily it goes to look at what lies beyond what it knows. */
+  exploration: number;
+  /** How much of its own size it can actually govern: records, officials, distance. */
+  administrativeCapacity: number;
+  /** How much its own members feel part of one thing. */
+  culturalCohesion: number;
 }
+
+/**
+ * One recorded change of one trait. Kept per people as a bounded ring (see
+ * `MAX_CULTURE_HISTORY`): it answers "why is this people like this?" without storing a row per
+ * trait per year, which over a thousand ticks would dwarf the rest of the state.
+ */
+export interface CultureChangeRecord {
+  tick: number;
+  year: number;
+  trait: keyof CultureTraits;
+  previousValue: number;
+  newValue: number;
+  /** Which pressure moved it, in the engine's own vocabulary. */
+  cause: CulturePressureKind;
+  /** Plain-language reason, shown in the UI. */
+  reason: string;
+  causeEventId?: string;
+}
+
+export type CulturePressureKind =
+  "war" | "trade" | "scarcity" | "discovery" | "expansion" | "complexity" | "belief" | "contact";
 
 export type GovernmentType =
   "clan" | "elder_council" | "chiefdom" | "tribal_monarchy" | "city_state" | "merchant_republic";
@@ -202,6 +233,11 @@ export interface Tribe {
   techProgress: Record<string, number>;
   /** Adoption progress (0..1) of technologies already known but not yet fully in use. */
   techAdoption: Record<string, number>;
+  /**
+   * Technologies this people once had and lost, with the year they fell out of use. Kept
+   * forever: it is what makes a rediscovery cheaper and what the chronicle reads back.
+   */
+  techLost: Record<string, number>;
   yearsAtLocation: number;
   scarcityYears: number;
   foundedYear: number;
@@ -232,7 +268,51 @@ export interface Tribe {
   absorbedIdentityIds: string[];
   /** Set when the tribe ended by merging into another one rather than by dying out. */
   absorbedByTribeId: string | null;
+  /** The system of belief this people follows; null while it has none. */
+  beliefSystemId: string | null;
+  /** How deeply the belief is held, 0..1: it grows with time and falls when faith is shaken. */
+  beliefAdherence: number;
+  /** The last notable cultural shifts of this people, oldest first. Bounded. */
+  cultureHistory: CultureChangeRecord[];
+  /**
+   * How well the people would take a blow. Recomputed from scratch every year by
+   * `computeResilience`, and stored only so the API and the interface can show it; nothing in
+   * the engine reads it back as memory. `null` before the first tick of a loaded world.
+   */
+  resilience: ResilienceProfile | null;
 }
+
+/**
+ * How a people decides who rules next. Derived from the form of government when the dynasty is
+ * founded, and re-read when the government changes: a house can outlive the rule that created it.
+ */
+export type SuccessionLaw = "hereditary" | "elective" | "council" | "military" | "religious" | "meritocratic";
+
+export type DynastyStatus = "active" | "overthrown" | "extinct" | "merged";
+
+export type DynastyEndReason =
+  /** No eligible heir was left. */
+  | "no_heir"
+  /** A rival took the throne by force. */
+  | "usurpation"
+  /** The people it ruled ceased to exist. */
+  | "extinct_people"
+  /** The people merged into another one (fusion, absorption). */
+  | "merged"
+  /** The form of government no longer passes power down a family. */
+  | "reform";
+
+/** How a succession ended. Anything but `peaceful` leaves a mark on legitimacy. */
+export type SuccessionOutcome =
+  | "peaceful"
+  /** Power held by others until an heir comes of age. */
+  | "regency"
+  /** Several claimants; the strongest prevailed without open war. */
+  | "disputed"
+  /** Someone outside the line took the throne. */
+  | "usurpation"
+  /** No successor at all: the seat stayed empty. */
+  | "interregnum";
 
 export interface Dynasty {
   id: string;
@@ -244,6 +324,69 @@ export interface Dynasty {
   endedYear: number | null;
   prestige: number;
   rulers: number;
+  /** Who sits at the head of the house right now; null between two rulers. */
+  currentLeaderId: string | null;
+  /** How much the house's claim is accepted, 0..1. Falls with every troubled succession. */
+  legitimacy: number;
+  successionLaw: SuccessionLaw;
+  status: DynastyStatus;
+  endReason: DynastyEndReason | null;
+  /** Troubled successions the house has been through: its record, never reset. */
+  crises: number;
+}
+
+/**
+ * Shape a system of belief takes. Chosen by the engine from the land, the culture and what the
+ * people has lived through — never from its historical identity: an Egyptian band on a plain
+ * with no river does not get a river cult.
+ */
+export type BeliefType =
+  | "ancestor_veneration"
+  | "nature_spirituality"
+  | "river_cult"
+  | "solar_cult"
+  | "mountain_cult"
+  | "pantheon"
+  | "imperial_cult"
+  | "philosophical"
+  | "syncretic";
+
+export type BeliefStatus = "active" | "absorbed" | "extinct";
+
+/**
+ * A system of belief born inside the simulation. It is NOT a real religion: name, principles
+ * and shape are generated, and two worlds with the same seed produce the same ones.
+ *
+ * Never deleted: a belief that dies out stays in the record with the year it did.
+ */
+export interface BeliefSystem {
+  id: string;
+  seq: number;
+  name: string;
+  type: BeliefType;
+  /** The people among whom it appeared. Kept even after that people is gone. */
+  foundedByTribeId: string;
+  /** Short generated statements of what it holds; shown in the UI, never parsed. */
+  principles: string[];
+  /** How much authority it lends to whoever rules, 0..1. */
+  authority: number;
+  /** How well it lives beside other beliefs, 0..1. */
+  tolerance: number;
+  /** How hard it pushes outward, 0..1. */
+  missionaryPressure: number;
+  /** What it adds to the cohesion of its followers, -1..1. */
+  cohesionEffect: number;
+  /** What it adds to the legitimacy of their rulers, -1..1. */
+  legitimacyEffect: number;
+  /** How much friction it creates with those who believe otherwise, 0..1. */
+  conflictRisk: number;
+  createdAtTick: number;
+  createdYear: number;
+  /** For a syncretic belief, the two it came from (oldest first). */
+  parentBeliefIds: string[];
+  status: BeliefStatus;
+  endedYear: number | null;
+  causeEventId: string | null;
 }
 
 export type BuildingType =
@@ -286,6 +429,51 @@ export interface ConstructionProject {
   required?: number;
 }
 
+/** Why a settlement was put where it was. Decided once, at foundation, and never rewritten. */
+export type SettlementFoundingReason =
+  "migration" | "agriculture" | "trade" | "military" | "religious" | "resource" | "administrative" | "refuge";
+
+/** What a place became known for. Derived from its land, its buildings and what it lived. */
+export type SettlementSpecialization =
+  | "agricultural"
+  | "mining"
+  | "military"
+  | "commercial"
+  | "harbour"
+  | "religious"
+  | "administrative"
+  | "craft";
+
+/** A stretch of years a settlement served as the capital of its state. */
+export interface CapitalPeriod {
+  fromYear: number;
+  /** Null while it still is the capital. */
+  toYear: number | null;
+}
+
+/**
+ * What a place remembers about itself. Kept compact on purpose: it travels with the settlement
+ * in every payload, so it stores counts, peaks and a capped list of the events that mattered,
+ * never the full chronicle (which lives in `historical_events` and is queried on demand).
+ */
+export interface SettlementHistory {
+  foundingReason: SettlementFoundingReason;
+  /** Set once at foundation; kept even after the founder dies. */
+  founderName: string | null;
+  specializations: SettlementSpecialization[];
+  /** The largest it ever was, and when. */
+  peakPopulation: number;
+  peakYear: number;
+  /** Times it was emptied (famine, sack, epidemic) and times people came back. */
+  destructions: number;
+  reconstructions: number;
+  /** Years spent under someone else's garrison, cumulative. */
+  occupiedYears: number;
+  capitalPeriods: CapitalPeriod[];
+  /** Ids of the few events that shaped it, newest last. Capped. */
+  notableEventIds: string[];
+}
+
 export type SettlementStatus = "active" | "abandoned";
 
 export type SettlementTier = "camp" | "village" | "town" | "city_state" | "capital";
@@ -322,6 +510,8 @@ export interface Settlement {
   founderId: string | null;
   /** Years since the last epidemic, used to avoid repeated outbreaks. */
   lastEpidemicYear: number | null;
+  /** What the place remembers about itself; `null` only in worlds that predate it. */
+  history: SettlementHistory;
 }
 
 export interface Civilization {
@@ -404,7 +594,73 @@ export interface Relationship {
   fusionYears: number;
 }
 
+// --- Explicit diplomacy -----------------------------------------------------------------------
+//
+// `Relationship` records how two peoples feel about each other. What follows records what they
+// have actually agreed to, and how each of them has behaved about it — which is a different
+// thing: a people can be trusted and still break a treaty, and the record must show it.
+
+export type DiplomaticAgreementType =
+  | "trade"
+  | "non_aggression"
+  | "defensive_alliance"
+  | "military_alliance"
+  | "passage"
+  | "tribute"
+  | "technology_exchange"
+  | "independence_guarantee"
+  | "embargo"
+  | "peace";
+
+export type DiplomaticAgreementStatus = "active" | "violated" | "expired" | "cancelled";
+
+export interface DiplomaticAgreement {
+  id: string;
+  seq: number;
+  /** Political instances (tribe ids), ordered by seq so a pair has one canonical key. */
+  firstCivilizationId: string;
+  secondCivilizationId: string;
+  type: DiplomaticAgreementType;
+  startedAtTick: number;
+  startedYear: number;
+  /** Null for an open-ended pact. */
+  expiresAtYear: number | null;
+  endedYear: number | null;
+  /** Trust between the two when they signed: what the pact was worth at the time. */
+  trustAtStart: number;
+  status: DiplomaticAgreementStatus;
+  /** How many times it has been broken while still standing. */
+  violationCount: number;
+  /** Who broke it last, if anyone. */
+  lastViolatorId: string | null;
+  causeEventId: string | null;
+}
+
+/**
+ * How a people is seen by everyone else. Unlike `Relationship`, this is not about one pair: it
+ * is the record a people carries into every negotiation, built from what it has actually done.
+ */
+export interface DiplomaticReputation {
+  civilizationId: string;
+  /** Keeps its word, 0..1. */
+  reliability: number;
+  /** Starts wars, 0..1. */
+  aggression: number;
+  /** Honours trade, 0..1. */
+  tradeReliability: number;
+  /** Respects treaties it signed, 0..1. */
+  treatyRespect: number;
+  /** How dangerous others consider it, 0..1. */
+  threatLevel: number;
+  /** Pacts signed and pacts broken, cumulative. */
+  agreementsSigned: number;
+  agreementsBroken: number;
+  updatedAtTick: number;
+}
+
 export type EventType =
+  | "agreement"
+  | "belief"
   | "vassalage"
   | "occupation"
   | "fusion"
@@ -542,6 +798,8 @@ export interface Counters {
   vassalage: number;
   occupation: number;
   composite: number;
+  belief: number;
+  agreement: number;
 }
 
 // --- Explicit political relations ------------------------------------------------------------
@@ -735,6 +993,12 @@ export interface WorldState {
   archive: Archive;
   /** Founding roster of a historical world; `null` for procedural and legacy worlds. Never regenerated. */
   roster: WorldRoster | null;
+  /** Systems of belief that appeared in this world (empty in worlds created before they existed). */
+  beliefs: BeliefSystem[];
+  /** Explicit pacts, active and ended: never deleted while the world exists. */
+  agreements: DiplomaticAgreement[];
+  /** One record per political instance that has ever had dealings with anyone. */
+  reputations: DiplomaticReputation[];
   /** Explicit political relations and fusions (empty in worlds created before they existed). */
   vassalages: VassalRelationship[];
   occupations: Occupation[];

@@ -226,6 +226,10 @@ export function fuse(
   const techAdoption: Record<string, number> = {};
   for (const tech of techs)
     techAdoption[tech] = Math.max(major.tribe.techAdoption[tech] ?? 0, minor.tribe.techAdoption[tech] ?? 0);
+  const techLost: Record<string, number> = {};
+  for (const [id, year] of Object.entries({ ...minor.tribe.techLost, ...major.tribe.techLost })) {
+    if (!techs.includes(id)) techLost[id] = year;
+  }
   const absorbed = [
     ...new Set(
       [first.key, second.key, ...major.tribe.absorbedIdentityIds, ...minor.tribe.absorbedIdentityIds].filter(
@@ -245,6 +249,8 @@ export function fuse(
     techs,
     techProgress: { ...minor.tribe.techProgress, ...major.tribe.techProgress },
     techAdoption,
+    // A fusion inherits what BOTH peoples had forgotten, minus what either still knows.
+    techLost,
     yearsAtLocation: major.tribe.yearsAtLocation,
     scarcityYears: 0,
     foundedYear: state.year,
@@ -271,6 +277,10 @@ export function fuse(
     identityType: "composite",
     absorbedIdentityIds: absorbed,
     absorbedByTribeId: null,
+    beliefSystemId: null,
+    beliefAdherence: 0,
+    cultureHistory: [],
+    resilience: null,
   };
   state.tribes.push(tribe);
   ctx.tribes.set(tribeId, tribe);
@@ -415,7 +425,11 @@ function inheritRelationships(ctx: SimContext, tribe: Tribe, sources: Tribe[]) {
       distance: Math.min(...rels.map((r) => r.distance)),
       lastInteractionYear: state.year,
       battles: rels.reduce((acc, r) => acc + r.battles, 0),
-      truceUntilYear: atWar ? null : (rels.map((r) => r.truceUntilYear).find((y) => y !== null) ?? null),
+      // Only a truce that is still running carries over: inheriting an expired one would
+      // leave the new relationship permanently labelled as a truce nobody signed.
+      truceUntilYear: atWar
+        ? null
+        : (rels.map((r) => r.truceUntilYear).find((y) => y !== null && y > state.year) ?? null),
       respect: avg((r) => r.respect),
       tradeDependency: max((r) => r.tradeDependency),
       culturalDistance: avg((r) => r.culturalDistance),

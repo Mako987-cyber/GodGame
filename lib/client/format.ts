@@ -101,6 +101,10 @@ export const CULTURE_LABELS: Record<string, string> = {
   spirituality: "Spiritualità",
   innovation: "Innovazione",
   expansionism: "Espansionismo",
+  tolerance: "Tolleranza",
+  exploration: "Esplorazione",
+  administrativeCapacity: "Capacità amministrativa",
+  culturalCohesion: "Coesione culturale",
 };
 
 export const STABILITY_LABELS: Record<string, string> = {
@@ -304,3 +308,68 @@ export function metaNumber(value: unknown): number | null {
 export function metaText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
+
+export const SUCCESSION_LAW_LABELS: Record<string, string> = {
+  hereditary: "ereditaria",
+  elective: "elettiva",
+  council: "per consiglio",
+  military: "militare",
+  religious: "religiosa",
+  meritocratic: "per merito",
+};
+
+export const DYNASTY_STATUS_LABELS: Record<string, string> = {
+  active: "al potere",
+  overthrown: "spodestata",
+  extinct: "estinta",
+  merged: "confluita",
+};
+
+export const AGREEMENT_STATUS_LABELS: Record<string, string> = {
+  active: "in vigore",
+  violated: "rotto",
+  expired: "scaduto",
+  cancelled: "decaduto",
+};
+
+export const REPUTATION_LABELS = {
+  reliability: "Affidabilità",
+  aggression: "Aggressività",
+  tradeReliability: "Lealtà commerciale",
+  treatyRespect: "Rispetto dei patti",
+  threatLevel: "Pericolosità percepita",
+} as const;
+
+export const RESILIENCE_LABELS = {
+  foodResilience: "Scorte di cibo",
+  economicDiversity: "Diversità economica",
+  administrativeCapacity: "Amministrazione",
+  socialCohesion: "Coesione sociale",
+  reserveCapacity: "Riserve",
+  migrationCapacity: "Capacità di spostarsi",
+  infrastructureQuality: "Infrastrutture",
+  recoverySpeed: "Velocità di ripresa",
+  healthCapacity: "Capacità sanitaria",
+} as const;
+
+export const FOUNDING_REASON_LABELS: Record<string, string> = {
+  migration: "approdo di una migrazione",
+  agriculture: "terra da coltivare",
+  trade: "posizione di scambio",
+  military: "punto da presidiare",
+  religious: "luogo di culto",
+  resource: "giacimento da sfruttare",
+  administrative: "sede di governo",
+  refuge: "rifugio",
+};
+
+export const SPECIALIZATION_LABELS: Record<string, string> = {
+  agricultural: "agricola",
+  mining: "mineraria",
+  military: "militare",
+  commercial: "commerciale",
+  harbour: "portuale",
+  religious: "religiosa",
+  administrative: "amministrativa",
+  craft: "artigiana",
+};

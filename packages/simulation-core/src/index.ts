@@ -49,6 +49,52 @@ export {
   type CreateWorldOptions,
 } from "./world-generator";
 export * from "./identity";
+export {
+  BELIEF_MIN_POPULATION,
+  BELIEF_MIN_SPIRITUALITY,
+  BELIEF_TYPE_LABELS,
+  SYNCRETISM_YEARS,
+  adherenceDrift,
+  applyDerivedEffects,
+  beliefContextOf,
+  beliefDistance,
+  beliefEffects,
+  beliefTypeFor,
+  canFoundBelief,
+  canSyncretize,
+  foundBelief,
+  updateBeliefs,
+  type BeliefContext,
+} from "./belief";
+export {
+  AGREEMENT_LABELS,
+  NEGOTIABLE,
+  activeAgreements,
+  cancelOrphanAgreements,
+  canSign,
+  emptyReputation,
+  expireAgreements,
+  hasAgreement,
+  pairKey,
+  reputationOf,
+  signAgreement,
+  signingChance,
+  updateAgreements,
+  updateReputation,
+  violateAgreement,
+} from "./agreements";
+export {
+  CRISIS_RESPONSE_LABELS,
+  chooseCrisisResponse,
+  computeResilience,
+  overallResilience,
+  rankCrisisResponses,
+  resilienceInputOf,
+  type CrisisResponse,
+  type CrisisSituation,
+  type ResilienceInput,
+  type ResilienceProfile,
+} from "./resilience";
 export * from "./placement";
 export * from "./politics";
 export * from "./fusion";
@@ -66,20 +112,45 @@ export {
   type RunOptions,
 } from "./simulation-engine";
 export {
+  LOSS_POPULATION_MARGIN,
+  LOSS_RATE,
+  LOSS_THRESHOLD,
+  REDISCOVERY_SPEED,
+  RESEARCH_BASE,
+  RESEARCH_FOCUS,
+  RESEARCH_KNOWLEDGE_WEIGHT,
   TECHNOLOGIES,
   TECH_BY_ID,
   TECH_CATEGORY_LABELS,
   TECH_STATUS_LABELS,
   advanceAdoption,
+  allocateResearch,
+  canBeLost,
+  canBeRediscovered,
+  canDiffuse,
   canResearch,
+  decayTechnologies,
+  knowledgeStrain,
   neutralEffects,
+  researchAptitude,
+  researchBudget,
+  researchWeight,
+  techAffinity,
   techEffects,
+  techNeeds,
+  techProfile,
   techStatus,
   tribeEffects,
+  type ResearchBudgetInput,
   type TechCategory,
+  type TechConditionInput,
+  type TechDriver,
   type TechEffects,
+  type TechNeeds,
+  type TechProfile,
   type TechStatus,
   type TechnologyDefinition,
+  type TechnologyProgressResult,
 } from "./technology";
 export { resolveBattle, sidePower, type BattleOutcome, type CombatSide } from "./warfare";
 export { birthProbability, baseMortality, related } from "./population";
@@ -111,13 +182,37 @@ export {
 } from "./normalize";
 export { checkInvariants, assertInvariants, InvariantError, type InvariantOptions } from "./invariants";
 export {
+  CULTURE_DISPOSITION_RANGE,
   CULTURE_LABELS,
+  CULTURE_RECORD_THRESHOLD,
+  CULTURE_TRAITS,
+  MAX_CULTURE_HISTORY,
+  cultureDisposition,
   culturalDistance,
   initialStability,
   randomCulture,
+  recordCultureChanges,
+  updateCulture,
   type CulturePressure,
 } from "./culture";
-export { leaderScore, leaderScoreParts, heirsOf, isEligibleLeader } from "./leadership";
+export {
+  DYNASTY_MIN_POPULATION,
+  MAJORITY_AGE,
+  SUCCESSION_LAW_LABELS,
+  SUCCESSION_OUTCOME_LABELS,
+  canFoundDynasty,
+  endDynasty,
+  ensureDynasty,
+  heirsOf,
+  isEligibleLeader,
+  leaderScore,
+  leaderScoreParts,
+  restoreDynasty,
+  successionCrisisRisk,
+  successionLawOf,
+  successionSituation,
+  type SuccessionRiskInput,
+} from "./leadership";
 export { epidemicRisk, type EpidemicRisk } from "./crises";
 export {
   annualYieldAt,
@@ -135,6 +230,22 @@ export {
 export { areaDeposits, areaQuality, workArea } from "./resources";
 export { foodNeed, housingCapacity, storageCapacity, type Production } from "./economy";
 export {
+  FOUNDING_REASON_LABELS,
+  MAX_NOTABLE_EVENTS,
+  SPECIALIZATION_LABELS,
+  emptyHistory,
+  foundingReasonFor,
+  recordDestruction,
+  recordReconstruction,
+  rememberEvent,
+  specializationsOf,
+  survivingInfrastructure,
+  updateSettlementHistory,
+} from "./settlement-history";
+export {
+  RUINS_FORGOTTEN_AFTER,
+  reviveSettlement,
+  ruinsAt,
   SETTLE_AFTER_YEARS,
   TIER_REQUIREMENTS,
   computeLevel,

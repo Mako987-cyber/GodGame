@@ -14,6 +14,8 @@ import type {
 } from "./types";
 
 export const EVENT_TYPE_LABELS: Record<EventType, string> = {
+  agreement: "Accordi",
+  belief: "Credenze",
   birth: "Nascita",
   notable_death: "Morte illustre",
   famine: "Carestia",

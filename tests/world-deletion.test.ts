@@ -215,6 +215,26 @@ async function fillEveryTable(worldId: string) {
       status: "active",
       civilizationId: "t999",
     });
+  if (counts.belief_systems === 0)
+    await db.insert(schema.beliefSystems).values({
+      worldId,
+      id: "bs999",
+      seq: 999,
+      name: "Culto della Piena",
+      type: "river_cult",
+      foundedByTribeId: "t1",
+      principles: ["il fiume dà e il fiume toglie"],
+      authority: 0.45,
+      tolerance: 0.6,
+      missionaryPressure: 0.25,
+      cohesionEffect: 0.12,
+      legitimacyEffect: 0.09,
+      conflictRisk: 0.34,
+      createdAtTick: 0,
+      createdYear: 0,
+      parentBeliefIds: [],
+      status: "active",
+    });
   // An expired lock row (a crashed batch): removed by the cascade with the world.
   if (counts.simulation_locks === 0)
     await db.insert(schema.simulationLocks).values({

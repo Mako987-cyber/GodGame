@@ -235,7 +235,9 @@ describe("continuità delle identità", () => {
         roster: { mode: "random-real", civilizationCount: 8 },
       });
       const gone = new Set<string>();
-      for (let tick = 0; tick < 150; tick++) {
+      // 250 years, not 150: since peoples reach agriculture on their own the early centuries
+      // are survivable, and the first extinctions come later.
+      for (let tick = 0; tick < 250; tick++) {
         const result = runSimulation(state, 1);
         for (const t of state.tribes) {
           if (gone.has(t.id)) expect(t.status, `${t.name} ricomparsa`).toBe("extinct");

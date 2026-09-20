@@ -116,6 +116,8 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       vassalage: 0,
       occupation: 0,
       composite: 0,
+      belief: 0,
+      agreement: 0,
     },
     climate: {
       modifier: 1,
@@ -137,6 +139,9 @@ export function createWorld(options: CreateWorldOptions): WorldState {
     crises: [],
     archive: { people: [], households: [] },
     roster: null,
+    beliefs: [],
+    agreements: [],
+    reputations: [],
     vassalages: [],
     occupations: [],
     composites: [],
@@ -170,6 +175,7 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       techs: [],
       techProgress: {},
       techAdoption: {},
+      techLost: {},
       yearsAtLocation: 0,
       scarcityYears: 0,
       foundedYear: state.year,
@@ -192,6 +198,10 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       identityType: "procedural",
       absorbedIdentityIds: [],
       absorbedByTribeId: null,
+      beliefSystemId: null,
+      beliefAdherence: 0,
+      cultureHistory: [],
+      resilience: null,
     };
     state.tribes.push(tribe);
     const members = populateTribe(state, tribe, rng.int(settings.minTribeSize, settings.maxTribeSize), rng);
@@ -276,6 +286,7 @@ function populateHistoricalWorld(
       techs: [...start.technologies],
       techProgress: {},
       techAdoption: Object.fromEntries(start.technologies.map((t) => [t, 1])),
+      techLost: {},
       yearsAtLocation: 0,
       scarcityYears: 0,
       foundedYear: state.year,
@@ -298,6 +309,10 @@ function populateHistoricalWorld(
       identityType: "historical",
       absorbedIdentityIds: [],
       absorbedByTribeId: null,
+      beliefSystemId: null,
+      beliefAdherence: 0,
+      cultureHistory: [],
+      resilience: null,
     };
     state.tribes.push(tribe);
     const size = sharedSize ?? rng.int(settings.minTribeSize, settings.maxTribeSize);

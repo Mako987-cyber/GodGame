@@ -1,4 +1,6 @@
 import {
+  AGREEMENT_LABELS,
+  BELIEF_TYPE_LABELS,
   BIOMES,
   bundleEntries,
   createWorld,
@@ -197,6 +199,9 @@ export async function getWorldDetailService(
     vassalages,
     occupations,
     composites,
+    beliefs,
+    agreements,
+    reputations,
   } = entities;
 
   const tribeIndex = new Map(tribes.map((t, i) => [t.id, i]));
@@ -359,6 +364,10 @@ export async function getWorldDetailService(
         techs: t.techs,
         techProgress: t.techProgress,
         techAdoption: t.techAdoption ?? {},
+        techLost: t.techLost ?? {},
+        cultureHistory: t.cultureHistory ?? [],
+        resilience: t.resilience ?? null,
+        beliefAdherence: t.beliefAdherence ?? 0,
         civilizationId: t.civilizationId,
         leader: leader
           ? {
@@ -426,6 +435,7 @@ export async function getWorldDetailService(
       epidemic: (row.crises ?? []).some(
         (c) => c.kind === "epidemic" && c.targetId === s.id && c.untilYear >= row.currentYear,
       ),
+      history: s.history ?? null,
     })),
     civilizations: civDTOs,
     relationships: relationships.map((r) => ({
@@ -474,7 +484,43 @@ export async function getWorldDetailService(
       endedYear: d.endedYear,
       prestige: d.prestige,
       rulers: d.rulers,
+      currentLeaderId: d.currentLeaderId ?? null,
+      legitimacy: d.legitimacy ?? 0.6,
+      successionLaw: d.successionLaw ?? "hereditary",
+      status: d.status ?? (d.endedYear === null ? "active" : "extinct"),
+      endReason: d.endReason ?? null,
+      crises: d.crises ?? 0,
     })),
+    beliefs: beliefs.map((b) => ({
+      id: b.id,
+      name: b.name,
+      type: b.type,
+      typeLabel: BELIEF_TYPE_LABELS[b.type],
+      foundedByTribeId: b.foundedByTribeId,
+      principles: b.principles,
+      authority: b.authority,
+      tolerance: b.tolerance,
+      missionaryPressure: b.missionaryPressure,
+      createdYear: b.createdYear,
+      parentBeliefIds: b.parentBeliefIds,
+      status: b.status,
+      endedYear: b.endedYear,
+      followerTribeIds: tribes.filter((t) => t.beliefSystemId === b.id).map((t) => t.id),
+    })),
+    agreements: agreements.map((a) => ({
+      id: a.id,
+      firstCivilizationId: a.firstCivilizationId,
+      secondCivilizationId: a.secondCivilizationId,
+      type: a.type,
+      typeLabel: AGREEMENT_LABELS[a.type],
+      startedYear: a.startedYear,
+      expiresAtYear: a.expiresAtYear,
+      endedYear: a.endedYear,
+      status: a.status,
+      violationCount: a.violationCount,
+      lastViolatorId: a.lastViolatorId,
+    })),
+    reputations,
     crises: (row.crises ?? [])
       .filter((c) => c.untilYear >= row.currentYear)
       .map((c) => ({
