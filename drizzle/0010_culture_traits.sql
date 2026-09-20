@@ -1,0 +1,1 @@
+ALTER TABLE "tribes" ADD COLUMN "culture_history" jsonb DEFAULT '[]'::jsonb NOT NULL;

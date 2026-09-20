@@ -245,6 +245,9 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
     vassalages,
     occupations,
     composites,
+    beliefs,
+    agreements,
+    reputations,
   ] = await Promise.all([
     db
       .select()
@@ -281,6 +284,21 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       .from(s.compositeIdentities)
       .where(eq(s.compositeIdentities.worldId, worldId))
       .orderBy(asc(s.compositeIdentities.seq)),
+    db
+      .select()
+      .from(s.beliefSystems)
+      .where(eq(s.beliefSystems.worldId, worldId))
+      .orderBy(asc(s.beliefSystems.seq)),
+    db
+      .select()
+      .from(s.diplomaticAgreements)
+      .where(eq(s.diplomaticAgreements.worldId, worldId))
+      .orderBy(asc(s.diplomaticAgreements.seq)),
+    db
+      .select()
+      .from(s.diplomaticReputations)
+      .where(eq(s.diplomaticReputations.worldId, worldId))
+      .orderBy(asc(s.diplomaticReputations.civilizationId)),
   ]);
   // `migrateState` fills everything a world created by an older engine version is missing.
   const state: WorldState = normalizeState(
@@ -307,6 +325,9 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       crises: row.crises ?? [],
       archive: { people: [], households: [] },
       roster: row.roster ?? null,
+      beliefs: beliefs.map(m.beliefFromRow),
+      agreements: agreements.map(m.agreementFromRow),
+      reputations: reputations.map(m.reputationFromRow),
       vassalages: vassalages.map(m.vassalFromRow),
       occupations: occupations.map(m.occupationFromRow),
       composites: composites.map(m.compositeFromRow),
@@ -418,6 +439,27 @@ export async function persistSimulation(
     state.composites.map((c) => m.compositeToRow(worldId, c)),
     [s.compositeIdentities.worldId, s.compositeIdentities.id],
     ["worldId", "id"],
+  );
+  await bulkUpsert(
+    tx,
+    s.beliefSystems,
+    state.beliefs.map((b) => m.beliefToRow(worldId, b)),
+    [s.beliefSystems.worldId, s.beliefSystems.id],
+    ["worldId", "id"],
+  );
+  await bulkUpsert(
+    tx,
+    s.diplomaticAgreements,
+    state.agreements.map((a) => m.agreementToRow(worldId, a)),
+    [s.diplomaticAgreements.worldId, s.diplomaticAgreements.id],
+    ["worldId", "id"],
+  );
+  await bulkUpsert(
+    tx,
+    s.diplomaticReputations,
+    state.reputations.map((r) => m.reputationToRow(worldId, r)),
+    [s.diplomaticReputations.worldId, s.diplomaticReputations.civilizationId],
+    ["worldId", "civilizationId"],
   );
 
   if (result.events.length)
@@ -595,6 +637,9 @@ export async function getWorldEntities(db: Database, worldId: string) {
     vassalages,
     occupations,
     composites,
+    beliefs,
+    agreements,
+    reputations,
   ] = await Promise.all([
     db
       .select()
@@ -646,6 +691,17 @@ export async function getWorldEntities(db: Database, worldId: string) {
       .from(s.compositeIdentities)
       .where(eq(s.compositeIdentities.worldId, worldId))
       .orderBy(asc(s.compositeIdentities.seq)),
+    db
+      .select()
+      .from(s.beliefSystems)
+      .where(eq(s.beliefSystems.worldId, worldId))
+      .orderBy(asc(s.beliefSystems.seq)),
+    db
+      .select()
+      .from(s.diplomaticAgreements)
+      .where(eq(s.diplomaticAgreements.worldId, worldId))
+      .orderBy(asc(s.diplomaticAgreements.seq)),
+    db.select().from(s.diplomaticReputations).where(eq(s.diplomaticReputations.worldId, worldId)),
   ]);
   return {
     vassalages,
@@ -660,6 +716,9 @@ export async function getWorldEntities(db: Database, worldId: string) {
     notable,
     techRows,
     dynasties,
+    beliefs,
+    agreements,
+    reputations,
   };
 }
 

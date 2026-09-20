@@ -12,6 +12,9 @@ import {
   type VassalRelationship,
   type CivilizationStats,
   type Civilization,
+  type BeliefSystem,
+  type DiplomaticAgreement,
+  type DiplomaticReputation,
   type Dynasty,
   type HistoricalEvent,
   type Household,
@@ -104,6 +107,11 @@ export const tribeFromRow = (seed: string, r: Select<typeof s.tribes>): Tribe =>
     techs: r.techs,
     techProgress: r.techProgress,
     techAdoption: r.techAdoption ?? {},
+    techLost: r.techLost ?? {},
+    beliefSystemId: r.beliefSystemId ?? null,
+    beliefAdherence: r.beliefAdherence ?? 0,
+    cultureHistory: r.cultureHistory ?? [],
+    resilience: r.resilience ?? null,
     yearsAtLocation: r.yearsAtLocation,
     scarcityYears: r.scarcityYears,
     foundedYear: r.foundedYear,
@@ -221,6 +229,7 @@ export const settlementFromRow = (r: Select<typeof s.settlements>): Settlement =
     influence: r.influence,
     founderId: r.founderId,
     lastEpidemicYear: r.lastEpidemicYear,
+    history: r.history ?? undefined,
   } as Settlement);
 
 export const civilizationToRow = (worldId: string, c: Civilization): Insert<typeof s.civilizations> => ({
@@ -381,6 +390,77 @@ export const dynastyFromRow = (r: Select<typeof s.dynasties>): Dynasty => ({
   endedYear: r.endedYear,
   prestige: r.prestige,
   rulers: r.rulers,
+  currentLeaderId: r.currentLeaderId,
+  legitimacy: r.legitimacy,
+  successionLaw: r.successionLaw as Dynasty["successionLaw"],
+  status: r.status as Dynasty["status"],
+  endReason: r.endReason as Dynasty["endReason"],
+  crises: r.crises,
+});
+
+export const beliefToRow = (worldId: string, b: BeliefSystem): Insert<typeof s.beliefSystems> => ({
+  worldId,
+  ...b,
+});
+
+export const beliefFromRow = (r: Select<typeof s.beliefSystems>): BeliefSystem => ({
+  id: r.id,
+  seq: r.seq,
+  name: r.name,
+  type: r.type,
+  foundedByTribeId: r.foundedByTribeId,
+  principles: r.principles ?? [],
+  authority: r.authority,
+  tolerance: r.tolerance,
+  missionaryPressure: r.missionaryPressure,
+  cohesionEffect: r.cohesionEffect,
+  legitimacyEffect: r.legitimacyEffect,
+  conflictRisk: r.conflictRisk,
+  createdAtTick: r.createdAtTick,
+  createdYear: r.createdYear,
+  parentBeliefIds: r.parentBeliefIds ?? [],
+  status: r.status,
+  endedYear: r.endedYear,
+  causeEventId: r.causeEventId,
+});
+
+export const agreementToRow = (
+  worldId: string,
+  a: DiplomaticAgreement,
+): Insert<typeof s.diplomaticAgreements> => ({ worldId, ...a });
+
+export const agreementFromRow = (r: Select<typeof s.diplomaticAgreements>): DiplomaticAgreement => ({
+  id: r.id,
+  seq: r.seq,
+  firstCivilizationId: r.firstCivilizationId,
+  secondCivilizationId: r.secondCivilizationId,
+  type: r.type,
+  startedAtTick: r.startedAtTick,
+  startedYear: r.startedYear,
+  expiresAtYear: r.expiresAtYear,
+  endedYear: r.endedYear,
+  trustAtStart: r.trustAtStart,
+  status: r.status,
+  violationCount: r.violationCount,
+  lastViolatorId: r.lastViolatorId,
+  causeEventId: r.causeEventId,
+});
+
+export const reputationToRow = (
+  worldId: string,
+  r: DiplomaticReputation,
+): Insert<typeof s.diplomaticReputations> => ({ worldId, ...r });
+
+export const reputationFromRow = (r: Select<typeof s.diplomaticReputations>): DiplomaticReputation => ({
+  civilizationId: r.civilizationId,
+  reliability: r.reliability,
+  aggression: r.aggression,
+  tradeReliability: r.tradeReliability,
+  treatyRespect: r.treatyRespect,
+  threatLevel: r.threatLevel,
+  agreementsSigned: r.agreementsSigned,
+  agreementsBroken: r.agreementsBroken,
+  updatedAtTick: r.updatedAtTick,
 });
 
 export const civStatsToRow = (

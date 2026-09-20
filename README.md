@@ -711,10 +711,92 @@ sociale: un vantaggio nel breve periodo pagato nel lungo.
 La guida non viene sorteggiata: il punteggio combina età, prestigio, abilità di comando, ricchezza, successi in
 guerra, conoscenza, appartenenza dinastica e sostegno del gruppo, con **pesi che dipendono dalla forma di
 governo** (consenso, anzianità, forza, eredità, elezione). La successione scatta per morte, incapacità (età o
-salute) o perdita di legittimità; se un governo ereditario resta senza eredi si apre una **crisi di successione**
-che abbassa la legittimità e può sfociare in un colpo di stato. Chi guida a lungo e bene fonda una **dinastia**,
-che sopravvive ai suoi membri e accumula prestigio. Nascite, ascese, fondazioni, morti e successioni generano
-eventi; le figure di rilievo (guide, fondatori, inventori, comandanti) sono consultabili nel dettaglio.
+salute) o perdita di legittimità. Nascite, ascese, fondazioni, morti e successioni generano eventi; le figure di
+rilievo (guide, fondatori, inventori, comandanti) sono consultabili nel dettaglio.
+
+#### Case regnanti
+
+Un capo trasforma il comando in una **casa regnante** quando c'è qualcosa da trasmettere: prestigio ≥ 0,5,
+gerarchia ≥ 45, centralizzazione ≥ 40, legittimità ≥ 0,45, almeno 60 persone e dei figli a cui lasciarlo
+(`canFoundDynasty`). Ogni casa registra la propria **legge di successione** (ereditaria, elettiva, per consiglio,
+militare, religiosa, per merito), che segue la forma di governo e viene riletta quando questa cambia: una casa può
+sopravvivere alla regola che l'ha creata. Registra inoltre la propria **legittimità**, il capo in carica, il numero
+di sovrani dati, le crisi attraversate e — quando finisce — lo stato (`overthrown`, `extinct`, `merged`) con la
+causa (`no_heir`, `usurpation`, `extinct_people`, `merged`, `reform`). Una casa non viene mai cancellata.
+
+#### Crisi di successione
+
+Finché una casa regna, il passaggio di potere può andare male. `successionCrisisRisk` è una funzione pura che
+somma le cause reali: più pretendenti con prestigio ravvicinato, un erede ancora minorenne (`MAJORITY_AGE`), la
+morte improvvisa del sovrano, una casa screditata, istituzioni debilitate, potere disperso, vassalli inquieti. Un
+erede unico in una casa solida ha rischio **esattamente zero**; senza eredi la crisi è certa.
+
+L'esito è uno fra `peaceful`, `regency` (reggenza fino alla maggiore età), `disputed` (trono conteso),
+`usurpation` (lo prende chi non apparteneva alla casa, che cade) e `interregnum` (nessun successore). Ogni esito
+è scritto nei metadata dell'evento di successione insieme al rischio calcolato e alla causa; le crisi costano
+legittimità alla casa e al popolo e aprono una crisi di tipo `succession`. Una casa spodestata può **tornare al
+potere** attraverso un discendente, ma non prima di dieci anni e solo dove il potere si trasmette ancora per
+sangue (`restoreDynasty`): gli anni fuori dal potere restano nel record.
+
+### Credenze e sistemi di valori
+
+Non esiste nessuna religione reale nel codice. Una **credenza** nasce fra un popolo diventato abbastanza
+spirituale (`BELIEF_MIN_SPIRITUALITY`, tarata sulla distribuzione che il motore produce davvero) e grande
+abbastanza da sostenerne i riti (`BELIEF_MIN_POPULATION`), e prende la forma di quello che quel popolo ha
+davanti: un grande fiume, il sole sopra il deserto, le montagne, i propri morti, uno stato che vuole essere
+sacro, una scuola che discute. `beliefTypeFor` è puro e **non legge l'identità storica**: due popoli sullo stesso
+fiume producono lo stesso tipo di culto, qualunque nome portino.
+
+Ogni credenza ha autorità, tolleranza e pressione missionaria; da queste derivano coesione, legittimità e
+attrito (`applyDerivedEffects`): più una credenza presta autorità a chi governa, meno facilmente convive con
+un'altra. Gli effetti sulla stabilità **scalano con l'adesione** del popolo (`beliefEffects`), che cresce nella
+quiete e si incrina con la fame e la guerra (`adherenceDrift`); una fede prosciugata lascia il popolo senza
+credenza, con un evento dedicato. La differenza di credenze entra nella distanza culturale usata dalla
+diplomazia (`beliefDistance`), con peso 0,25 contro 0,75 dei tratti culturali.
+
+Il **sincretismo** unisce due culti di popoli che sono stati vicini e indisturbati per una generazione
+(`SYNCRETISM_YEARS`), entrambi tolleranti e aperti. Non richiede fiducia diplomatica: in questo motore la
+fiducia si accumula solo col commercio attivo, e due popoli possono restare in pace per tre secoli con fiducia
+zero — che è esattamente la situazione in cui i riti si mescolano. I due culti d'origine non vengono cancellati:
+passano a `absorbed` e restano citati come genitori del nuovo.
+
+### Accordi diplomatici e reputazione
+
+`Relationship` dice come due popoli si sentono l'uno verso l'altro. Gli **accordi** dicono che cosa hanno
+davvero messo per iscritto, e la **reputazione** che cosa ciascuno è noto per fare di quella firma: sono tre
+cose diverse, e un popolo può essere benvoluto e allo stesso tempo famoso per stracciare i patti.
+
+Sette tipi si negoziano da soli (commercio, non aggressione, passaggio, scambio di conoscenze, alleanza
+difensiva, alleanza militare, garanzia d'indipendenza); tributo, embargo e pace sono conseguenze che il motore
+registra, non proposte. Ogni tipo dichiara la fiducia che richiede, l'ostilità che tollera e la durata; le
+soglie sono lette sulla distribuzione che questo motore produce davvero, non su ideali 0–1. Nessuno firma con
+chi ha `treatyRespect` sotto 0,25.
+
+Dichiarare guerra a chi aveva firmato **rompe tutti i patti in piedi con quella coppia** e lo mette agli atti
+di chi ha attaccato: `treatyRespect` −0,20, `reliability` −0,15. La reputazione (`reliability`, `aggression`,
+`tradeReliability`, `treatyRespect`, `threatLevel`) si muove lentamente e **solo per quello che è successo**.
+
+La reputazione ha effetti reali: `knowledgeOpenness` decide quanto sapere passa fra due popoli. Uno scambio di
+conoscenze firmato più che raddoppia il flusso, un embargo lo azzera quasi, e un popolo non mostra le proprie
+botteghe a chi considera pericoloso o inaffidabile.
+
+### Crisi e resilienza
+
+La **resilienza non è una statistica che il motore ricorda e fa derivare**: è ricalcolata ogni anno da quello
+che il popolo ha davvero — scorte, terre libere, rete di città, strade, tecnologie _effettivamente adottate_,
+un governo ancora in grado di dare ordini, vicini disposti ad aiutare. Nove indicatori, tutti 0–1, più un
+valore complessivo (`overallResilience`).
+
+Le tecnologie contano **in proporzione a quanto sono adottate**: una conservazione degli alimenti conosciuta ma
+usata al 10% protegge quasi quanto non averla.
+
+Quando arriva il colpo, `rankCrisisResponses` classifica dieci risposte possibili (razionamento, migrazione,
+commercio, riforma, repressione, redistribuzione, colonizzazione, guerra, richiesta d'aiuto, abbandono) con un
+punteggio **e il motivo** di quel punteggio. La scelta è deterministica e finisce nei metadata dell'evento di
+carestia, così la cronologia può dire _perché_ quel popolo ha razionato invece di marciare. Senza un vicino più
+debole a portata, la guerra vale esattamente zero: la fame non basta a giustificarla.
+
+### Insediamenti e infrastrutture
 
 ### Insediamenti e infrastrutture
 
@@ -739,6 +821,27 @@ eventi; le figure di rilievo (guide, fondatori, inventori, comandanti) sono cons
   tornano nomadi.
 - **Civiltà**: tribù con almeno 2 insediamenti e 100 abitanti.
 
+#### Memoria storica di un luogo
+
+Ogni insediamento porta con sé un riassunto compatto di sé stesso (`SettlementHistory`), deliberatamente
+limitato perché viaggia in ogni payload: la cronologia completa resta in `historical_events` e si interroga a
+richiesta.
+
+- **Perché è stato scelto** (`foundingReason`): letto una volta sola, alla fondazione, da terra e circostanze —
+  migrazione, terra fertile, posizione di scambio, punto da presidiare, luogo di culto, giacimento, sede di
+  governo, rifugio. Non viene mai ricalcolato.
+- **Per cosa è conosciuto** (`specializations`): ricalcolato da ciò che il luogo ha davvero — campi e pascoli,
+  miniere e cave, caserme e mura, mercato, porto, tempio, fornace, e lo status di capitale.
+- **Il massimo che è stato**: popolazione di picco e anno.
+- **Distruzioni e ricostruzioni**, anni passati sotto occupazione, **periodi come capitale** (solo l'ultimo può
+  essere ancora aperto) e una lista **limitata** (`MAX_NOTABLE_EVENTS`) degli eventi che l'hanno segnato.
+
+Un luogo abbandonato non è finito: una banda che si ferma dove stava una città **vi rientra** invece di fondarne
+una seconda accanto alle rovine (`reviveSettlement`). Mantiene nome, anno di fondazione, fondatore e tutto ciò
+che era stato; `reconstructions` sale di uno. Solo una parte di quello che stava in piedi sopravvive
+(`survivingInfrastructure`: −3% per ogni anno di abbandono), e dopo `RUINS_FORGOTTEN_AFTER` anni le rovine non
+sono più riutilizzabili.
+
 ### Tecnologie
 
 Ventuno tecnologie in quattro categorie: **sopravvivenza** (fuoco, utensili di pietra, abiti, conservazione degli
@@ -750,10 +853,50 @@ e, dove esiste, una **contropartita** (il bronzo dipende dallo stagno, spesso da
 malcontento e corruzione; le rotte commerciali portano anche le epidemie).
 
 Il progresso non è un interruttore: una tecnologia passa da sconosciuta a in osservazione, sperimentazione,
-sviluppo, scoperta, diffusione e infine **adozione**. Gli effetti valgono in proporzione al livello di adozione,
-che cresce con popolazione, ordine e cultura dell'innovazione ed è frenato dal tradizionalismo. La conoscenza si
-diffonde con il commercio (alta probabilità fra partner frequenti), la convivenza (lenta), la migrazione
-(trasferimento parziale) e la conquista (accesso immediato, adozione lentissima).
+sviluppo, scoperta, diffusione e infine **adozione**, e può poi tornare indietro fino a essere **perduta**. Gli
+effetti valgono in proporzione al livello di adozione, che cresce con popolazione, ordine e cultura
+dell'innovazione ed è frenato dal tradizionalismo. La conoscenza si diffonde con il commercio (alta probabilità
+fra partner frequenti), la convivenza (lenta), la migrazione (trasferimento parziale) e la conquista (accesso
+immediato, adozione lentissima).
+
+#### Il catalogo è globale, lo stato è locale
+
+`TECHNOLOGIES` è un catalogo di definizioni condiviso da tutto il mondo; **quello che un popolo sa è suo e
+soltanto suo**, e vive in `Tribe.techs`, `techProgress`, `techAdoption` e `techLost` (in database:
+`world_technologies`, con chiave primaria `(world_id, tribe_id, tech_id)`). Una scoperta non sblocca mai nulla
+per gli altri: chi vuole quella tecnica deve svilupparla da sé o riceverla da chi la usa davvero.
+
+Tutti i popoli partono **esattamente dalle stesse tecnologie** (`STARTING_CIVILIZATION_STATE`): nessuno riceve
+l'agricoltura perché si chiama Egizi, la scrittura perché si chiama Sumeri o l'ingegneria perché si chiama
+Romani. L'identità storica è colore, nomi ed estetica, mai un bonus tecnologico.
+
+#### Perché due popoli non seguono la stessa strada
+
+Ogni anno un popolo dispone di un **budget di ricerca** (`researchBudget`) costruito da contributi nominati e
+testabili: adulti curiosi e istruiti, surplus alimentare, moltiplicatore d'innovazione delle tecniche già in uso,
+sostegno del capo, spinta culturale, stabilità interna, densità urbana e contatti esterni. Quel budget non viene
+spalmato su tutto ciò che è ricercabile: `allocateResearch` lo **distribuisce per quote**, pesate da
+
+- **affinità** — che cosa offre la terra intorno (argilla, rame, un fiume, suolo fertile);
+- **bisogno** — fame, guerra, commercio, materiali, amministrazione, freddo;
+- **inclinazione** — una propensione stabile del popolo per una famiglia di tecniche, derivata per hash dal seme
+  del mondo e dall'id della tribù (`researchAptitude`), mai dall'identità storica.
+
+Le quote sono concentrate (`RESEARCH_FOCUS`), così un popolo insegue davvero quello che gli serve invece di
+avanzare su tutti i fronti: è questa la ragione per cui, a parità di partenza, i percorsi divergono per ordine,
+ritmo e contenuto.
+
+#### Perdita e riscoperta
+
+Una tecnica che il gruppo non riesce più a praticare si spegne gradualmente: `knowledgeStrain` misura la
+pressione (troppe poche braccia per i suoi specialisti, villaggi perduti, ordine crollato, anni di carestia) e
+l'adozione scende anno dopo anno finché la conoscenza è **perduta**, con evento dedicato e la causa nel testo.
+Un popolo sano non perde mai nulla: senza pressione la deriva è esattamente zero. Le tecniche senza prerequisiti
+— il fuoco, gli utensili di pietra — non si perdono: ogni generazione le ritrova vivendo.
+
+Il registro `techLost` conserva l'anno della perdita per sempre. Chi la ritrova paga un costo ridotto
+(`REDISCOVERY_SPEED`): restano le rovine, gli attrezzi, i racconti degli anziani. La riscoperta genera un evento
+con `subtype: "rediscovery"` e l'anno in cui la tecnica era stata perduta.
 
 ### Cultura, governo e stabilità
 
@@ -761,6 +904,24 @@ Ogni tribù ha nove **tratti culturali** normalizzati 0–100 — cooperazione, 
 tradizionalismo, centralizzazione, gerarchia sociale, spiritualità, innovazione, espansionismo — generati
 proceduralmente dal seed (nessun riferimento a popoli reali) e soggetti a deriva lenta guidata da ciò che il
 gruppo vive davvero: guerre, scambi, carestie, scoperte, espansione, complessità.
+
+Alla pressione si somma una **disposizione** stabile per tratto (`cultureDisposition`, ±16 punti), derivata per
+hash dal seme del mondo e dall'id della tribù. Serve a impedire che la sola deriva faccia convergere tutti sugli
+stessi numeri: due popoli che vivono la stessa storia non diventano lo stesso popolo, perché leggono gli stessi
+fatti in modo diverso. Come per l'inclinazione tecnologica, non dipende dall'identità storica e non costa stato:
+i mondi salvati prima che esistesse la ricevono al caricamento senza migrazione.
+
+Ai nove tratti originari se ne aggiungono quattro: **tolleranza** (quanto il popolo vive bene accanto a chi è
+diverso), **esplorazione** (quanto va a vedere cosa c'è oltre), **capacità amministrativa** (quanto di sé
+riesce davvero a governare) e **coesione culturale** (quanto i suoi membri si sentono una cosa sola). Reagiscono
+a due nuove pressioni: la convivenza con popoli diversi e la forza di una credenza condivisa.
+
+Ogni popolo tiene un **registro delle variazioni** (`cultureHistory`): per ogni scostamento superiore a
+`CULTURE_RECORD_THRESHOLD` salva anno, tratto, valore precedente e nuovo, la pressione responsabile e il motivo
+in chiaro. È un anello limitato a `MAX_CULTURE_HISTORY` voci, perché viaggia con ogni tribù in ogni payload.
+Il registro viene scritto percorrendo un **ordine canonico dei tratti** (`CULTURE_TRAITS`) e non
+`Object.keys`: JSONB non conserva l'ordine delle chiavi, e una cultura ricaricata dal database itererebbe
+diversamente da una costruita in memoria.
 
 Le **forme di governo** evolvono un passo alla volta al raggiungimento delle condizioni: clan → consiglio degli
 anziani → chiefdom → monarchia tribale → città-stato → repubblica mercantile, con regressione possibile quando
@@ -1055,25 +1216,30 @@ ancora usato, profilo dei nomi con i nomi riservati, fonti e note; poi aumentare
 
 Tutte le risposte hanno la forma `{ "data": … }` oppure `{ "error": { "code", "message", "details?" } }`.
 
-| Metodo   | Percorso                                       | Note                                                                                                                                                       |
-| -------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/worlds`                                  | `{ name, seed?, width?, height?, roster? }` (24–96). Genera mappa, roster, popoli e popolazione. 201 → `{ worldId, world }`                                |
-| `GET`    | `/api/worlds`                                  | elenco dei mondi con riepilogo                                                                                                                             |
-| `GET`    | `/api/worlds/:id`                              | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo      |
-| `PATCH`  | `/api/worlds/:id`                              | `{ status: "running" \| "paused" }`                                                                                                                        |
-| `DELETE` | `/api/worlds/:id`                              | `{ confirmation: "ELIMINA <nome>", worldName }`: 200 eliminato e verificato, 202 in corso (vedi [Eliminazione](#eliminazione-di-un-mondo))                 |
-| `GET`    | `/api/worlds/:id/deletion`                     | stato dell'ultima eliminazione del mondo (job, fase, progresso, righe per tabella)                                                                         |
-| `POST`   | `/api/worlds/:id/deletion`                     | prosegue un'eliminazione già confermata per un budget di tempo (idempotente): 200 completata, 202 in corso                                                 |
-| `POST`   | `/api/worlds/:id/simulate`                     | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                      |
-| `GET`    | `/api/worlds/:id/events`                       | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                 |
-| `GET`    | `/api/worlds/:id/stats`                        | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                     |
-| `GET`    | `/api/worlds/:id/people/:personId`             | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                              |
-| `GET`    | `/api/worlds/:id/civilizations`                | popoli del mondo (istanze politiche): identità, stato, leader con titolo, stato politico, predecessori/successori, identità assorbite                      |
-| `GET`    | `/api/worlds/:id/civilizations/:civId`         | scheda: identità, fondazione (tick 0, leader iniziale, tecnologia iniziale, qualità della partenza), primo insediamento, `realHistoryApplied: false`       |
-| `GET`    | `/api/worlds/:id/civilizations/:civId/history` | storia generata: eventi paginati (`page`, `pageSize`), tecnologie in ordine di scoperta, eventi di guida                                                   |
-| `GET`    | `/api/historical-identities`                   | catalogo: `search` (nome, alias, regione), `era` (ancient, classical, medieval, modern, indigenous, regional), `category`, `continent`, `page`, `pageSize` |
-| `GET`    | `/api/historical-identities/:key`              | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                            |
-| `GET`    | `/api/cron/advance`                            | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                            |
+| Metodo   | Percorso                                                         | Note                                                                                                                                                       |
+| -------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/worlds`                                                    | `{ name, seed?, width?, height?, roster? }` (24–96). Genera mappa, roster, popoli e popolazione. 201 → `{ worldId, world }`                                |
+| `GET`    | `/api/worlds`                                                    | elenco dei mondi con riepilogo                                                                                                                             |
+| `GET`    | `/api/worlds/:id`                                                | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo      |
+| `PATCH`  | `/api/worlds/:id`                                                | `{ status: "running" \| "paused" }`                                                                                                                        |
+| `DELETE` | `/api/worlds/:id`                                                | `{ confirmation: "ELIMINA <nome>", worldName }`: 200 eliminato e verificato, 202 in corso (vedi [Eliminazione](#eliminazione-di-un-mondo))                 |
+| `GET`    | `/api/worlds/:id/deletion`                                       | stato dell'ultima eliminazione del mondo (job, fase, progresso, righe per tabella)                                                                         |
+| `POST`   | `/api/worlds/:id/deletion`                                       | prosegue un'eliminazione già confermata per un budget di tempo (idempotente): 200 completata, 202 in corso                                                 |
+| `POST`   | `/api/worlds/:id/simulate`                                       | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                      |
+| `GET`    | `/api/worlds/:id/events`                                         | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                 |
+| `GET`    | `/api/worlds/:id/stats`                                          | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                     |
+| `GET`    | `/api/worlds/:id/people/:personId`                               | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                              |
+| `GET`    | `/api/worlds/:id/civilizations`                                  | popoli del mondo (istanze politiche): identità, stato, leader con titolo, stato politico, predecessori/successori, identità assorbite                      |
+| `GET`    | `/api/worlds/:id/civilizations/:civId`                           | scheda: identità, fondazione (tick 0, leader iniziale, tecnologia iniziale, qualità della partenza), primo insediamento, `realHistoryApplied: false`       |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/history`                   | storia generata: eventi paginati (`page`, `pageSize`), tecnologie in ordine di scoperta, eventi di guida                                                   |
+| `GET`    | `/api/worlds/:id/technologies`                                   | catalogo del mondo con quante civiltà **davvero** possiedono ciascuna tecnologia, pioniere, anno della prima scoperta, quante l'hanno persa                |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/technologies`              | stato per popolo: `status`, progresso, adozione, fonte, prerequisiti mancanti. Filtri `status=` e `category=` (CSV), `page`, `pageSize`                    |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/technologies/discoverable` | solo ciò che è a portata (in corso, a un prerequisito, già visto nei vicini, o perso), con affinità, peso e requisiti mancanti                             |
+| `GET`    | `/api/worlds/:id/technologies/:techId/history`                   | come una tecnologia ha viaggiato in quel mondo: pioniere, chi l'ha presa e come, chi l'ha persa, anni di diffusione, eventi collegati                      |
+| `GET`    | `/api/worlds/:id/settlements/:settlementId/history`              | memoria del luogo: ragione della fondazione, fondatore, specializzazioni, picco, distruzioni, ricostruzioni, periodi come capitale, cronologia paginata    |
+| `GET`    | `/api/historical-identities`                                     | catalogo: `search` (nome, alias, regione), `era` (ancient, classical, medieval, modern, indigenous, regional), `category`, `continent`, `page`, `pageSize` |
+| `GET`    | `/api/historical-identities/:key`                                | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                            |
+| `GET`    | `/api/cron/advance`                                              | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                            |
 
 Codici di errore: `INVALID_INPUT` 400, `TICKS_NOT_ALLOWED` 400, `NOT_FOUND` 404, `SIMULATION_IN_PROGRESS` 409,
 `WORLD_RUNNING` 409, `WORLD_BUSY` 409 (lock sul mondo non ottenuto entro `lock_timeout`), `CONFIRMATION_MISMATCH`
@@ -1252,6 +1418,14 @@ Il progetto gestisce bene circa 1.000–1.500 individui attivi. Evoluzioni previ
 
 Stato reale delle funzionalità (implementato · parziale · previsto):
 
+0. **Tecnologia locale per civiltà** — _implementata e misurata_: catalogo globale, stato per popolo, parità
+   iniziale, budget e quote di ricerca divergenti, diffusione che non aggira i requisiti materiali, perdita e
+   riscoperta. Misure su 5 semi × 250 tick, mappa 64×64: i set tecnologici distinti fra popoli vivi passano da
+   **1 a 4–8**, gli ordini di scoperta distinti da **1–3 a 4–10** e il tetto raggiunto da **5 a 8** tecnologie
+   (16–17 su 600 tick). _Limiti_: la **riscoperta è rara nelle partite standard** (0–1 casi su 600 tick),
+   perché quasi tutte le perdite colpiscono popoli che poi si estinguono; le **varianti locali** (nome e
+   descrizione della tecnica adattati al luogo) **non sono implementate**: `localName` non esiste. Il catalogo
+   resta di 24 tecnologie e non copre l'età classica, medievale, moderna o industriale.
 1. **Identità dell'età moderna** — _implementate_: 10 identità (Francesi, Inglesi, Spagnoli, Portoghesi,
    Ottomani, Italiani, Tedeschi, Russi, Etiopi, Statunitensi) come sandbox culturali. Mancano altre identità
    moderne e la categoria `regional` è vuota.
@@ -1282,7 +1456,72 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
     `lock_timeout`), ma **non confermata sui log di produzione**, che non erano accessibili. I nuovi log
     strutturati e `npm run diagnose:world-delete` servono a confermarla.
 13. La **diplomazia** non forma quasi mai alleanze (soglia di fiducia 0,7 irraggiungibile in pratica) e il
-    tributo mantiene alta l'ostilità nei vassallaggi: è il motivo per cui le fusioni sono rare.
+    tributo mantiene alta l'ostilità nei vassallaggi: è il motivo per cui le fusioni sono rare. Non esistono
+    **accordi diplomatici espliciti** (`DiplomaticAgreement`) né **reputazione** (`DiplomaticReputation`): le
+    relazioni sono ancora descritte da fiducia, ostilità, stato e fase.
+14. **Dinastie e successioni** — _implementate e misurate_. Prima di questa milestone il sistema dinastico era
+    **contenuto morto**: `tribal_monarchy` richiedeva `dynastyId !== null` ma le case si fondavano solo sotto
+    `tribal_monarchy`, un vincolo circolare che produceva **0 dinastie in 500 tick su ogni seme**. Sbloccato
+    permettendo al capo di un chiefdom di rendere ereditario il comando: ora 5–9 case per mondo (500 tick,
+    mappa 64×64), fino a 10 sovrani per casa, fini con causa registrata e restaurazioni. _Limiti_: gli esiti
+    `disputed` e `usurpation` restano rari nelle partite standard (prevalgono `peaceful`, `regency` e
+    `interregnum`) perché dipendono da più pretendenti con prestigio ravvicinato; la **guerra civile** come
+    esito distinto e la **frammentazione territoriale** alla morte di un sovrano **non sono modellate** (una
+    crisi abbassa legittimità e apre una crisi, non spacca lo stato); non esistono matrimoni dinastici né
+    ostaggi politici; la **timeline dinastica in UI non è stata realizzata** — i dati sono esposti dall'API
+    (`legitimacy`, `successionLaw`, `status`, `endReason`, `crises`, `currentLeaderId`) ma nessun pannello li
+    disegna.
+15. **Credenze** — _implementate e misurate_: 71 credenze su 10 mondi × 600 tick, con **54% dei popoli
+    sopravvissuti** che ne segue una, e forme davvero diverse (culto degli antenati, spiritualità della natura,
+    culto del fiume, pantheon, culto dello stato). Nessuna è assegnata per identità storica. _Limiti_: il
+    **sincretismo è molto raro** (2 casi su 10 mondi × 600 tick), perché richiede due popoli credenti, vicini e
+    indisturbati per 25 anni consecutivi; l'**adesione satura a 1,00** nei popoli stabili e non torna a
+    scendere se non con fame o guerra, quindi le dinamiche di fede si vedono poco; non esistono **eresie,
+    scismi, conversione missionaria attiva, festività né clero come specialisti**; la pressione missionaria è
+    registrata e influenza l'attrito, ma **non converte nessuno**; i tipi `solar_cult`, `mountain_cult` e
+    `philosophical` sono raggiungibili ma non compaiono nelle misure fatte.
+16. **Memoria storica delle città** — _implementata e misurata_ su 303 insediamenti (6 mondi × 600 tick):
+    ragioni di fondazione distribuite (migrazione 207, giacimento 30, presidio 23, scambio 22, agricoltura 11,
+    rifugio 10), 35 luoghi che sono stati capitale, 245 distruzioni e **11 rinascite** con continuità di nome,
+    anno di fondazione e fondatore. _Limiti_: la ragione `religious` e le specializzazioni `military`,
+    `commercial`, `religious` e `craft` **non compaiono** nelle misure, perché dipendono da edifici (caserma,
+    mercato, tempio, fornace) che il motore costruisce raramente: è un limite del sistema di costruzione, non
+    della memoria; la memoria è **aggregata** (contatori e picchi, più una lista di al massimo 12 eventi), non
+    una cronologia per luogo; **nessun pannello UI** mostra ancora fondazione, specializzazioni, occupazioni e
+    periodi come capitale.
+17. **Accordi diplomatici e reputazione** — _implementati e misurati_: 19–208 patti per mondo (5 semi × 600
+    tick), tutti e sette i tipi negoziabili compaiono, 83 violazioni registrate, e le reputazioni divergono
+    davvero (`treatyRespect` fra 0,50 e 0,99, `threatLevel` fra 0,01 e 0,62). La reputazione influenza la
+    diffusione tecnologica (`knowledgeOpenness`). _Limiti_: l'**aggressività resta vicina a 0,01** quasi
+    ovunque, perché le guerre dichiarate sono rare e la media le diluisce; non esistono **matrimoni dinastici,
+    ostaggi politici, ultimatum né coalizioni**; embargo, tributo e pace sono modellati ma **non vengono mai
+    firmati dal motore** — sono registrabili, non ancora prodotti.
+18. **Crisi e resilienza** — _implementati e misurati_: profili con resilienza complessiva fra 0,31 e 0,81, e
+    risposte alle crisi differenziate (redistribuzione 105, commercio 50, migrazione 36, colonizzazione 3 su
+    5 mondi × 600 tick). _Limiti_: **sei risposte su dieci non compaiono mai** nelle partite standard
+    (razionamento, riforma, repressione, guerra, richiesta d'aiuto, abbandono): la redistribuzione domina
+    perché coesione e cooperazione restano alte. La resilienza è **calcolata ma non retroagisce**: nessun
+    effetto meccanico su mortalità o collasso, solo la scelta della risposta e la visualizzazione.
+19. **API e interfaccia** — _implementate_: cinque nuovi endpoint (catalogo del mondo, tecnologie per civiltà
+    con filtri e paginazione, tecnologie raggiungibili, storia di una tecnologia, memoria di un luogo), tutti
+    con contratto Zod verificato in uscita, catalogo statico costruito una volta per istanza e nessuna query
+    per riga. In interfaccia: dinastia, credenze, resilienza, reputazione e accordi nella scheda del popolo;
+    memoria del luogo nella scheda dell'insediamento. _Limiti_: **non esiste il filtraggio per civiltà
+    osservatrice** — ogni endpoint mostra tutto a chiunque, perché senza `CivilizationKnowledge` non c'è un
+    modello di ciò che un popolo sa degli altri; e **non esiste una scheda tecnologica globale** con la
+    velocità di diffusione disegnata.
+20. **Non implementati**, nonostante siano stati progettati: esplorazione, spionaggio e informazione incompleta
+    (`CivilizationKnowledge`, fog of war); varianti locali delle tecniche (`localName`); harness di scenari
+    riproducibili (`simulation:run --scenario`, `simulation:compare`); pannello UI «Perché è successo?». La
+    **causalità** esiste già a livello di dato (`causeEventIds` su ogni evento, in memoria e in database) ma
+    non è ancora esposta né come replay né come pannello.
+21. La **cultura emergente** è passata a 13 tratti, con l'aggiunta di `tolerance`, `exploration`,
+    `administrativeCapacity` e `culturalCohesion`, e ogni popolo tiene un registro limitato delle proprie
+    variazioni. La convergenza culturale è stata **misurata e corretta** (deviazione standard fra popoli vivi
+    dopo 400 tick: cooperazione da ±2,6 a ±11,5, tradizionalismo da ±1,8 a ±6,4, innovazione da ±4,0 a ±8,2),
+    ma il militarismo resta poco distinguibile perché è dominato dalla guerra. Aggiungere i quattro tratti ha
+    cambiato il consumo del PRNG in generazione: **i mondi creati da semi precedenti non sono più identici**
+    a com'erano prima di questa milestone (i mondi già salvati non sono toccati e si ricaricano invariati).
 
 Trade-off noti che restano validi:
 
@@ -1301,6 +1540,16 @@ Trade-off noti che restano validi:
 
 In ordine di priorità (il database è stato reso affidabile prima di estendere le funzionalità):
 
+0. **Completare la milestone «civiltà vive»**, nell'ordine in cui le parti dipendono l'una dall'altra:
+   varianti locali delle tecniche (`localName`, `localDescription`); registro delle variazioni culturali e
+   quattro tratti mancanti; guerra civile e frammentazione come esiti di una crisi di successione, matrimoni
+   dinastici; conversione missionaria attiva, scismi e clero come specialisti; accordi diplomatici espliciti e
+   reputazione; esplorazione, spionaggio e informazione incompleta con filtraggio delle API per civiltà
+   osservatrice; profilo di resilienza; endpoint e pannelli per tecnologie, dinastie, credenze, storia dei
+   luoghi, storia causale e replay (i dati esistono già: manca l'interfaccia).
+   Va aggiunto inoltre un **harness di scenari senza database** (`simulation:run --scenario`,
+   `simulation:compare`) per misurare valle fertile, deserto, isola, corridoio commerciale e mondo isolato:
+   oggi il bilanciamento tecnologico è misurato con script ad hoc, non con scenari riproducibili nel repo.
 1. **Catalogo**: estendere le identità reali (Oceania, Africa subsahariana, Asia centrale e sudorientale,
    Americhe) e popolare la categoria `regional`.
 2. **Età moderna**: altre identità moderne selezionabili, sempre con partenza uniforme e senza modificatori.

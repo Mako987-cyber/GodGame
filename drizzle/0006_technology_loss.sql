@@ -1,0 +1,1 @@
+ALTER TABLE "tribes" ADD COLUMN "tech_lost" jsonb DEFAULT '{}'::jsonb NOT NULL;

@@ -1,10 +1,26 @@
-import { AGE, BUILDINGS, ECONOMY, HOUSING, SETTLEMENT_TIER_LABELS, TRIBE_COLORS } from "./constants";
+import {
+  AGE,
+  BUILDINGS,
+  BUILDING_TYPES,
+  ECONOMY,
+  HOUSING,
+  SETTLEMENT_TIER_LABELS,
+  TRIBE_COLORS,
+} from "./constants";
 import { initialStability } from "./culture";
 import type { Community, SimContext } from "./context";
 import { emptyStock, nextId } from "./context";
-import { actor, describePlace, emitEvent, pluralPeople } from "./events";
+import { actor, describePlace, emitEvent, formatYear, pluralPeople } from "./events";
 import { cellAt, cellsInRadius, clamp, distance, lineCells, round } from "./grid";
 import { identityOf } from "./identity/composite";
+import {
+  emptyHistory,
+  foundingReasonFor,
+  recordDestruction,
+  recordReconstruction,
+  rememberEvent,
+  survivingInfrastructure,
+} from "./settlement-history";
 import {
   CAPITAL_PATTERN,
   identityPlaceName,
@@ -33,6 +49,7 @@ import type {
   Settlement,
   SettlementTier,
   Tribe,
+  SettlementFoundingReason,
 } from "./types";
 
 /** Years a band must stay in the same place before settling down. */
@@ -52,6 +69,7 @@ export function createSettlement(
   x: number,
   y: number,
   founderId: string | null = null,
+  reason: SettlementFoundingReason = "migration",
 ): Settlement {
   const { id, seq } = nextId(ctx.state, "settlement", "s");
   const used = new Set(ctx.state.settlements.map((s) => s.name));
@@ -94,6 +112,11 @@ export function createSettlement(
     influence: 1,
     founderId,
     lastEpidemicYear: null,
+    history: emptyHistory(
+      reason,
+      founderId ? (ctx.people.get(founderId)?.name ?? null) : null,
+      ctx.state.year,
+    ),
   };
   ctx.state.settlements.push(settlement);
   ctx.settlements.set(settlement.id, settlement);
@@ -118,15 +141,104 @@ export function canFoundSettlement(ctx: SimContext, community: Community): boole
     community.foodRatio >= 0.95 &&
     tribe.stock.food >= community.members.length * 0.2 &&
     cell.habitability >= 0.5 &&
-    !nearbySettlement(ctx, community.x, community.y, 4)
+    // Ruins on this very spot are not "a settlement nearby": they are the place itself, and
+    // moving back into them is exactly what should happen.
+    (ruinsAt(ctx, community.x, community.y) !== undefined ||
+      !nearbySettlement(ctx, community.x, community.y, 4))
   );
+}
+
+/** A place left empty long enough that nothing of it is worth reusing. */
+export const RUINS_FORGOTTEN_AFTER = 120;
+
+/** An abandoned settlement of this people (or of anyone) on the very spot a band has stopped. */
+export function ruinsAt(ctx: SimContext, x: number, y: number): Settlement | undefined {
+  return ctx.state.settlements.find(
+    (s) =>
+      s.status === "abandoned" &&
+      s.x === x &&
+      s.y === y &&
+      s.abandonedYear !== null &&
+      ctx.state.year - s.abandonedYear <= RUINS_FORGOTTEN_AFTER,
+  );
+}
+
+/**
+ * People move back into a place that had been left. It keeps its name, its founding year, its
+ * founder and everything it had been: a rebirth is a new chapter of the same town, which is
+ * why `reconstructions` goes up instead of a second settlement appearing beside the ruins.
+ *
+ * What survived the years of abandonment is only part of what stood there (`survivingInfrastructure`).
+ */
+export function reviveSettlement(ctx: SimContext, community: Community, ruins: Settlement): Settlement {
+  const tribe = community.tribe;
+  const emptyYears = ctx.state.year - (ruins.abandonedYear ?? ctx.state.year);
+  const kept = survivingInfrastructure(ruins, emptyYears);
+  const previousOwner = ruins.tribeId;
+  ruins.status = "active";
+  ruins.abandonedYear = null;
+  ruins.tribeId = tribe.id;
+  ruins.civilizationId = tribe.civilizationId;
+  ruins.famineYears = 0;
+  ruins.unrest = 0.05;
+  ruins.lastFoodRatio = 1;
+  ruins.construction = null;
+  // Walls and foundations outlast the people who raised them; roofs and stores do not.
+  for (const type of BUILDING_TYPES) {
+    ruins.buildings[type] = Math.floor((ruins.buildings[type] ?? 0) * kept);
+  }
+  ruins.buildings.camp = Math.max(1, ruins.buildings.camp);
+  ruins.stock = { ...tribe.stock, goods: { ...tribe.stock.goods } };
+  tribe.stock = emptyStock();
+  tribe.status = "settled";
+  for (const p of community.members) p.settlementId = ruins.id;
+  ruins.population = community.members.length;
+  ruins.defense = Math.max(1, round(ruins.defense * kept, 2));
+  const event = emitEvent(ctx, {
+    type: "settlement_founded",
+    subtype: "refounded",
+    importance: 4,
+    actors: [actor.tribe(tribe), actor.settlement(ruins)],
+    x: ruins.x,
+    y: ruins.y,
+    title: `${ruins.name} torna a vivere`,
+    description: t(
+      "Dopo {years} anni di rovine, {n} {di:people} si sono stabilite fra le mura di {name}, fondata nell'anno {founded}.",
+      {
+        years: emptyYears,
+        n: pluralPeople(community.members.length),
+        people: peoplePhrase(tribe),
+        name: ruins.name,
+        founded: formatYear(ruins.foundedYear),
+      },
+    ),
+    metadata: {
+      settlementId: ruins.id,
+      population: community.members.length,
+      emptyYears,
+      foundedYear: ruins.foundedYear,
+      previousTribeId: previousOwner,
+      survivingInfrastructure: kept,
+      reconstructions: (ruins.history?.reconstructions ?? 0) + 1,
+    },
+  });
+  recordReconstruction(ruins, event.id.length > 0 ? event.id : null);
+  return ruins;
 }
 
 export function foundSettlement(ctx: SimContext, community: Community): Settlement {
   const tribe = community.tribe;
   const first = !ctx.state.settlements.some((s) => s.tribeId === tribe.id);
   const founder = tribe.leaderId ? ctx.people.get(tribe.leaderId) : undefined;
-  const settlement = createSettlement(ctx, tribe, community.x, community.y, founder?.id ?? null);
+  const rels = ctx.state.relationships.filter((r) => r.aId === tribe.id || r.bId === tribe.id);
+  const reason = foundingReasonFor(tribe, community.area, {
+    threatened: community.threat >= 0.6,
+    hungry: community.foodRatio < 0.9 || tribe.scarcityYears >= 2,
+    tradePartners: rels.filter((r) => r.tradeVolume > 10 && !r.atWar).length,
+    settlementsOwned: ctx.state.settlements.filter((o) => o.status === "active" && o.tribeId === tribe.id)
+      .length,
+  });
+  const settlement = createSettlement(ctx, tribe, community.x, community.y, founder?.id ?? null, reason);
   settlement.stock = { ...tribe.stock, goods: { ...tribe.stock.goods } };
   tribe.stock = emptyStock();
   tribe.status = "settled";
@@ -136,7 +248,7 @@ export function foundSettlement(ctx: SimContext, community: Community): Settleme
     founder.title = founder.title ?? "founder";
     founder.prestige = round(clamp(founder.prestige + 0.1));
   }
-  emitEvent(ctx, {
+  const event = emitEvent(ctx, {
     type: "settlement_founded",
     subtype: first ? "first" : "band",
     importance: first ? 4 : 3,
@@ -159,8 +271,10 @@ export function foundSettlement(ctx: SimContext, community: Community): Settleme
       founderId: founder?.id ?? null,
       habitability: cellAt(ctx.state, settlement.x, settlement.y).habitability,
       yearsAtLocation: tribe.yearsAtLocation,
+      foundingReason: reason,
     },
   });
+  rememberEvent(settlement, event.id);
   return settlement;
 }
 
@@ -703,7 +817,7 @@ export function checkCollapse(ctx: SimContext, community: Community) {
       : epidemic
         ? "dopo l'epidemia"
         : "per lo spopolamento";
-  emitEvent(ctx, {
+  const collapseEvent = emitEvent(ctx, {
     type: "settlement_collapse",
     subtype: s.famineYears >= limit ? "famine" : "depopulation",
     importance: 4,
@@ -728,6 +842,8 @@ export function checkCollapse(ctx: SimContext, community: Community) {
       .filter((c) => c.targetId === s.id && c.eventId)
       .map((c) => c.eventId as string),
   });
+  // The place is abandoned, not erased: what it was stays on its own record.
+  recordDestruction(s, collapseEvent.id.length > 0 ? collapseEvent.id : null);
 }
 
 /**
@@ -976,6 +1092,7 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     techs: [...parent.techs],
     techProgress: { ...parent.techProgress },
     techAdoption: { ...parent.techAdoption },
+    techLost: { ...parent.techLost },
     foundedYear: ctx.state.year,
     extinctYear: null,
     civilizationId: null,
@@ -993,6 +1110,10 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     identityType: parent.identityType,
     absorbedIdentityIds: [],
     absorbedByTribeId: null,
+    beliefSystemId: null,
+    beliefAdherence: 0,
+    cultureHistory: [],
+    resilience: null,
   };
   // The new polity drifts culturally from the parent right away.
   tribe.culture.centralization = clamp(tribe.culture.centralization - 10, 5, 95);

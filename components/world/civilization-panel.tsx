@@ -20,6 +20,13 @@ import {
 import { useWorldUi } from "@/lib/client/store";
 import { IdentityEmblem } from "./identity-emblem";
 import { TribeIdentitySection } from "./identity-section";
+import {
+  BeliefSection,
+  CultureHistorySection,
+  DiplomacySection,
+  DynastySection,
+  ResilienceSection,
+} from "./civilization-life";
 import { TribePoliticsSection } from "./political-bonds";
 import { EntityLink, Facts, Meter, StockList, SubHeading, TraitList } from "./stat-bits";
 
@@ -122,6 +129,10 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           )}
           <SubHeading>Cultura</SubHeading>
           <TraitList traits={tribe.culture} labels={CULTURE_LABELS} />
+          <CultureHistorySection tribe={tribe} />
+          <DynastySection tribe={tribe} detail={detail} />
+          <BeliefSection tribe={tribe} detail={detail} />
+          <ResilienceSection tribe={tribe} />
           {tribe.status === "nomadic" && (
             <>
               <SubHeading>Scorte della banda</SubHeading>
@@ -169,6 +180,7 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           </ul>
         </>
       )}
+      <DiplomacySection tribe={tribe} detail={detail} />
       <TribePoliticsSection tribe={tribe} detail={detail} />
       <SubHeading>Relazioni</SubHeading>
       {relations.length === 0 ? (

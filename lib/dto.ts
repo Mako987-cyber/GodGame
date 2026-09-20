@@ -1,20 +1,31 @@
 import type {
+  BeliefStatus,
+  BeliefType,
   ConflictPhase,
   ConstructionProject,
+  DiplomaticAgreementStatus,
+  DiplomaticAgreementType,
+  DiplomaticReputation,
+  CultureChangeRecord,
   CultureTraits,
   DiplomaticStatus,
   DistributionPolicy,
+  DynastyEndReason,
+  DynastyStatus,
   EventActor,
   GovernmentType,
   IdentityType,
   JsonValue,
   PlacementReport,
   RosterEntry,
+  ResilienceProfile,
   RosterMode,
   Season,
   SeasonState,
+  SettlementHistory,
   SettlementTier,
   Stability,
+  SuccessionLaw,
   Stockpile,
   WorldSettings,
 } from "@genesis/simulation-core";
@@ -103,7 +114,15 @@ export interface TribeDTO {
   scarcityYears: number;
   parentTribeId: string | null;
   techAdoption: Record<string, number>;
+  /** techId -> year it was lost; a rediscovery removes the entry. */
+  techLost: Record<string, number>;
   culture: CultureTraits;
+  /** The last notable cultural shifts, oldest first. */
+  cultureHistory: CultureChangeRecord[];
+  /** How well this people would take a blow; recomputed every tick. */
+  resilience: ResilienceProfile | null;
+  /** How firmly it holds its system of belief, 0..1. */
+  beliefAdherence: number;
   government: GovernmentType;
   stability: Stability;
   distribution: DistributionPolicy;
@@ -148,6 +167,8 @@ export interface SettlementDTO {
   influence: number;
   founderId: string | null;
   epidemic: boolean;
+  /** Compact self-memory of the place; the full chronicle is paginated elsewhere. */
+  history: SettlementHistory | null;
 }
 
 export interface CivilizationDTO {
@@ -228,6 +249,45 @@ export interface DynastyDTO {
   endedYear: number | null;
   prestige: number;
   rulers: number;
+  currentLeaderId: string | null;
+  legitimacy: number;
+  successionLaw: SuccessionLaw;
+  status: DynastyStatus;
+  endReason: DynastyEndReason | null;
+  /** Troubled successions the house has been through. */
+  crises: number;
+}
+
+export interface BeliefDTO {
+  id: string;
+  name: string;
+  type: BeliefType;
+  typeLabel: string;
+  foundedByTribeId: string;
+  principles: string[];
+  authority: number;
+  tolerance: number;
+  missionaryPressure: number;
+  createdYear: number;
+  parentBeliefIds: string[];
+  status: BeliefStatus;
+  endedYear: number | null;
+  /** Peoples that follow it right now. */
+  followerTribeIds: string[];
+}
+
+export interface AgreementDTO {
+  id: string;
+  firstCivilizationId: string;
+  secondCivilizationId: string;
+  type: DiplomaticAgreementType;
+  typeLabel: string;
+  startedYear: number;
+  expiresAtYear: number | null;
+  endedYear: number | null;
+  status: DiplomaticAgreementStatus;
+  violationCount: number;
+  lastViolatorId: string | null;
 }
 
 export interface CrisisDTO {
@@ -301,6 +361,12 @@ export interface WorldDetail {
   technologies: TechnologyDTO[];
   discoveries: { tribeId: string; techId: string; year: number; method: string }[];
   dynasties: DynastyDTO[];
+  /** Systems of belief that appeared in this world, active and ended. */
+  beliefs: BeliefDTO[];
+  /** Explicit pacts, active and ended. */
+  agreements: AgreementDTO[];
+  /** What each people is known for. */
+  reputations: DiplomaticReputation[];
   crises: CrisisDTO[];
   notablePeople: {
     id: string;

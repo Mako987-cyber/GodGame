@@ -17,6 +17,7 @@ import {
 } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
 import { SettlementOccupationNote } from "./political-bonds";
+import { SettlementMemorySection } from "./settlement-memory";
 import { EntityLink, Facts, Meter, StockList, SubHeading } from "./stat-bits";
 
 const CONSTRUCTION_STATUS: Record<string, string> = {
@@ -85,6 +86,7 @@ export function SettlementPanel({
       {s.status === "abandoned" && s.abandonedYear !== null && (
         <p className="text-war mt-3 text-sm">Abbandonato nel {fmtYear(s.abandonedYear)}.</p>
       )}
+      <SettlementMemorySection settlement={s} detail={detail} />
       {s.status === "active" && (
         <>
           <SubHeading>Alimentazione</SubHeading>
