@@ -4,6 +4,7 @@ import { DatabaseError } from "@/components/world/db-error";
 import { WorldCard } from "@/components/world/world-card";
 import type { WorldListItem } from "@/lib/dto";
 import { listWorldsService } from "@/lib/services/world-service";
+import { describeError } from "@/lib/utils/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export default async function HomePage() {
   try {
     worlds = (await listWorldsService()).slice(0, 6);
   } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
+    error = describeError(e);
   }
 
   return (

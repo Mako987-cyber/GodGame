@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { isEmbeddedDatabase } from "./driver";
 import type { Database } from "./index";
 
 /**
@@ -17,6 +18,15 @@ import type { Database } from "./index";
  *
  * All three are `SET LOCAL` (via `set_config(..., true)`): they end with the transaction and
  * never leak to the next client of a pooled connection.
+ *
+ * `idle_in_transaction_session_timeout` is skipped on the embedded PGlite database used in local
+ * development. It is the only one of the three that kills the *session* rather than the
+ * statement, and PGlite has exactly one session for the whole process with no pool to open
+ * another: when it fires there, the shared client is destroyed, every later query — including
+ * the plain `select ... from worlds` behind the home page — can no longer be served, and PGlite
+ * blocks the event loop instead of rejecting, freezing the dev server until it is restarted.
+ * The setting also protects against something PGlite cannot suffer: a serverless function frozen
+ * mid-transaction while pinned to a pooled server connection.
  */
 export interface TxTimeouts {
   lockTimeoutMs: number;
@@ -30,11 +40,24 @@ export const DEFAULT_TX_TIMEOUTS: TxTimeouts = {
   idleInTransactionMs: 15_000,
 };
 
-export async function applyTxTimeouts(tx: Pick<Database, "execute">, t: TxTimeouts) {
-  await tx.execute(sql`select
-    set_config('lock_timeout', ${`${Math.max(1, Math.trunc(t.lockTimeoutMs))}ms`}, true),
-    set_config('statement_timeout', ${`${Math.max(1, Math.trunc(t.statementTimeoutMs))}ms`}, true),
-    set_config('idle_in_transaction_session_timeout', ${`${Math.max(1, Math.trunc(t.idleInTransactionMs))}ms`}, true)`);
+const ms = (value: number) => `${Math.max(1, Math.trunc(value))}ms`;
+
+/**
+ * `options.sessionTimeouts` is false for a single-session database (PGlite), where terminating
+ * the session would take the whole process down instead of just this transaction.
+ */
+export async function applyTxTimeouts(
+  tx: Pick<Database, "execute">,
+  t: TxTimeouts,
+  options: { sessionTimeouts?: boolean } = {},
+) {
+  const settings = [
+    sql`set_config('lock_timeout', ${ms(t.lockTimeoutMs)}, true)`,
+    sql`set_config('statement_timeout', ${ms(t.statementTimeoutMs)}, true)`,
+  ];
+  if (options.sessionTimeouts !== false)
+    settings.push(sql`set_config('idle_in_transaction_session_timeout', ${ms(t.idleInTransactionMs)}, true)`);
+  await tx.execute(sql`select ${sql.join(settings, sql`, `)}`);
 }
 
 /** `db.transaction` with the timeouts above applied as its first statement. */
@@ -44,8 +67,9 @@ export function boundedTransaction<T>(
   timeouts: Partial<TxTimeouts> = {},
 ): Promise<T> {
   const t = { ...DEFAULT_TX_TIMEOUTS, ...timeouts };
+  const sessionTimeouts = !isEmbeddedDatabase(db);
   return db.transaction(async (tx) => {
-    await applyTxTimeouts(tx as unknown as Database, t);
+    await applyTxTimeouts(tx as unknown as Database, t, { sessionTimeouts });
     return fn(tx as unknown as Database);
   });
 }
