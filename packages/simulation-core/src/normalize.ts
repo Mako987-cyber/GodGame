@@ -31,7 +31,11 @@ import type {
  * fills every field introduced later with a deterministic default, so a legacy world keeps
  * running (and keeps producing the same results) without any destructive migration.
  */
-export const SIMULATION_VERSION = 2;
+/**
+ * 3: explicit occupations and vassal relationships (a won siege no longer annexes on the spot),
+ *    fusions into composite identities, grammar-aware event texts, placement bands.
+ */
+export const SIMULATION_VERSION = 3;
 
 /** Deposits added with the extended economy, derived from the terrain so legacy maps stay stable. */
 export function deriveDeposits(seed: string, cell: Cell): { clay: number; tin: number; coal: number } {
@@ -155,6 +159,7 @@ export function normalizeCivilization(civ: Civilization): Civilization {
   civ.identityType ??= civ.identityId ? "historical" : "legacy";
   civ.politicalStem ??= null;
   civ.formerNames ??= [];
+  civ.namePattern ??= null;
   return civ;
 }
 
@@ -217,6 +222,7 @@ export function normalizeRelationship(rel: Relationship): Relationship {
   rel.culturalDistance ??= 0.3;
   rel.phase ??= rel.atWar ? "war" : rel.truceUntilYear ? "truce" : "peace";
   rel.phaseYears ??= 0;
+  rel.fusionYears ??= 0;
   if (rel.lastConflictYear === undefined) rel.lastConflictYear = rel.battles > 0 ? rel.warStartYear : null;
   rel.status ??= rel.atWar
     ? "war"
@@ -273,6 +279,9 @@ export function normalizeCounters(counters: Partial<Counters> | undefined): Coun
     dynasty: num(counters?.dynasty, 0),
     construction: num(counters?.construction, 0),
     crisis: num(counters?.crisis, 0),
+    vassalage: num(counters?.vassalage, 0),
+    occupation: num(counters?.occupation, 0),
+    composite: num(counters?.composite, 0),
   };
 }
 
@@ -295,6 +304,10 @@ export function migrateState(state: WorldState): WorldState {
   state.dynasties ??= [] as Dynasty[];
   state.crises ??= [] as ActiveCrisis[];
   state.archive ??= { people: [], households: [] };
+  // Worlds created before explicit political relations and fusions existed have none.
+  state.vassalages ??= [];
+  state.occupations ??= [];
+  state.composites ??= [];
   for (const cell of state.cells) normalizeCell(state.seed, cell);
   for (const person of state.people) normalizePerson(person);
   for (const person of state.archive.people) normalizePerson(person);

@@ -5,10 +5,13 @@ import {
   createWorld,
   deserializeState,
   hashWorld,
+  IDENTITY_BY_KEY,
   recordAbsorbedIdentity,
+  renderPoliticalName,
   runSimulation,
   serializeWorld,
   STATE_VERSION,
+  type GovernmentType,
   type Person,
   type Tribe,
   type WorldState,
@@ -157,18 +160,28 @@ describe("continuità delle identità", () => {
     checkCivilization(ctx, egizi, members(state, egizi).length);
     const civ = state.civilizations[0]!;
     expect(civ.identityId).toBe("egyptian");
-    expect(civ.name).toBe(`Confederazione di ${a.name}`);
+    // The pattern comes from the identity's profile, drawn deterministically for this state.
+    expect(IDENTITY_BY_KEY.get("egyptian")!.language.politicalNamePatterns).toContain(civ.namePattern);
+    const nameFor = (government: GovernmentType) =>
+      renderPoliticalName(civ.namePattern!, government, {
+        capital: a.name,
+        identity: IDENTITY_BY_KEY.get("egyptian"),
+      });
+    expect([`Confederazione di ${a.name}`, "Confederazione Egizia"]).toContain(civ.name);
+    expect(civ.name).toBe(nameFor("clan"));
     expect(egizi.name).toBe("Egizi");
+    const founded = civ.name;
 
     egizi.government = "tribal_monarchy";
     updateCivilizationForm(ctx, civ);
-    expect(civ.name).toBe(`Regno di ${a.name}`);
-    expect(civ.formerNames).toEqual([`Confederazione di ${a.name}`]);
+    expect(civ.name).toBe(nameFor("tribal_monarchy"));
+    expect(civ.name.startsWith("Regno ")).toBe(true);
+    expect(civ.formerNames).toEqual([founded]);
     expect(civ.identityId).toBe("egyptian");
     const transformed = ctx.events.find(
       (e) => e.type === "civilization_transformed" && e.subtype === "government",
     );
-    expect(transformed?.metadata.previousName).toBe(`Confederazione di ${a.name}`);
+    expect(transformed?.metadata.previousName).toBe(founded);
     // Same government again: no new name, no new event.
     const before = ctx.events.length;
     updateCivilizationForm(ctx, civ);
@@ -177,8 +190,30 @@ describe("continuità delle identità", () => {
     civ.status = "collapsed";
     recordCivilizationCollapse(ctx, civ);
     const collapse = ctx.events.find((e) => e.subtype === "collapse");
-    expect(collapse?.title).toBe(`Crolla Regno di ${a.name}`);
+    // "Regno" is masculine: "Crolla il Regno …", never "Crolla Regno …".
+    expect(collapse?.title).toBe(`Crolla il ${civ.name}`);
     expect(collapse?.description).toContain("Gli Egizi sopravvivono");
+  });
+
+  it("il nome politico segue il pattern: dopo la capitale o con l'aggettivo concordato", () => {
+    const egyptian = IDENTITY_BY_KEY.get("egyptian")!;
+    expect(
+      renderPoliticalName("{form} di {capital}", "tribal_monarchy", { capital: "Naru", identity: egyptian }),
+    ).toBe("Regno di Naru");
+    expect(
+      renderPoliticalName("{form} {adjective}", "tribal_monarchy", { capital: "Naru", identity: egyptian }),
+    ).toBe("Regno Egizio");
+    expect(
+      renderPoliticalName("{form} {adjective}", "elder_council", { capital: "Naru", identity: egyptian }),
+    ).toBe("Lega Egizia");
+    const roman = IDENTITY_BY_KEY.get("roman")!;
+    expect(
+      renderPoliticalName("{form} {adjective}", "elder_council", { capital: "Vela", identity: roman }),
+    ).toBe("Lega Romana");
+    // Without an identity the adjective pattern falls back to the capital.
+    expect(renderPoliticalName("{form} {adjective}", "clan", { capital: "Kor" })).toBe(
+      "Confederazione di Kor",
+    );
   });
 
   it("un'identità comparsa dal nulla viola le invarianti (nessuna ricreazione silenziosa)", () => {
@@ -190,32 +225,38 @@ describe("continuità delle identità", () => {
   });
 
   it("una civiltà scomparsa non ricompare: le tribù estinte restano estinte", () => {
-    const state = createWorld({
-      seed: "estinzioni",
-      width: 48,
-      height: 48,
-      roster: { mode: "random-real", civilizationCount: 8 },
-    });
+    // Several seeds, so the scenario loses someone whatever the catalog draws for a given seed.
     const extinct = new Set<string>();
-    for (let tick = 0; tick < 150; tick++) {
-      const result = runSimulation(state, 1);
-      for (const t of state.tribes) {
-        if (extinct.has(t.id)) expect(t.status, `${t.name} ricomparsa`).toBe("extinct");
-        if (t.status === "extinct" && !extinct.has(t.id)) {
-          extinct.add(t.id);
-          // The end of a people is always told by an event of that very tick.
-          const told = result.events.some(
-            (e) =>
-              e.actors.some((a) => a.id === t.id) &&
-              (e.type === "tribe_extinct" || (e.type === "migration" && e.subtype === "absorption")),
-          );
-          expect(told, `${t.name} scomparsa senza evento`).toBe(true);
+    for (const seed of ["estinzioni", "estinzioni-2", "estinzioni-3", "estinzioni-4"]) {
+      const state = createWorld({
+        seed,
+        width: 48,
+        height: 48,
+        roster: { mode: "random-real", civilizationCount: 8 },
+      });
+      const gone = new Set<string>();
+      for (let tick = 0; tick < 150; tick++) {
+        const result = runSimulation(state, 1);
+        for (const t of state.tribes) {
+          if (gone.has(t.id)) expect(t.status, `${t.name} ricomparsa`).toBe("extinct");
+          if (t.status === "extinct" && !gone.has(t.id)) {
+            gone.add(t.id);
+            extinct.add(`${seed}:${t.id}`);
+            // The end of a people is always told by an event of that very tick.
+            const told = result.events.some(
+              (e) =>
+                e.actors.some((a) => a.id === t.id) &&
+                (e.type === "tribe_extinct" || (e.type === "migration" && e.subtype === "absorption")),
+            );
+            expect(told, `${t.name} scomparsa senza evento`).toBe(true);
+          }
         }
       }
+      expect(checkIdentityLineage(state), seed).toEqual([]);
+      if (extinct.size > 0) break;
     }
     // The scenario must actually lose someone, or the check above proves nothing.
     expect(extinct.size).toBeGreaterThan(0);
-    expect(checkIdentityLineage(state)).toEqual([]);
   });
 
   it("la successione dei leader è deterministica", () => {

@@ -2,6 +2,8 @@ import { AGE, GOVERNMENTS } from "./constants";
 import { nextId, type SimContext } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
 import { clamp, round } from "./grid";
+import { identityOf } from "./identity/composite";
+import { formatEventDescription as t, formatLeaderTitle, peoplePhrase } from "./language/format";
 import { dynastyName } from "./names";
 import type { Dynasty, Person, Tribe } from "./types";
 
@@ -123,7 +125,14 @@ export function ensureDynasty(ctx: SimContext, tribe: Tribe, leader: Person): Dy
     x: leader.x,
     y: leader.y,
     title: `Nasce la ${dynasty.name}`,
-    description: `Il potere tra i ${tribe.name} non torna più al consiglio: ${leader.name} lo trasmetterà ai suoi discendenti. Nasce la ${dynasty.name}.`,
+    description: t(
+      "Il potere presso {art:people} non torna più al consiglio: {leader} lo trasmetterà ai suoi discendenti. Nasce la {dynasty}.",
+      {
+        people: peoplePhrase(tribe),
+        leader: leader.name,
+        dynasty: dynasty.name,
+      },
+    ),
     metadata: { dynastyId: id, founderId: leader.id, government: tribe.government },
   });
   return dynasty;
@@ -182,8 +191,11 @@ function installLeader(
     y: leader.y,
     title:
       reason === "coup"
-        ? `${leader.name} rovescia la guida dei ${tribe.name}`
-        : `${leader.name} alla guida dei ${tribe.name}`,
+        ? t("{leader} rovescia la guida {di:people}", { leader: leader.name, people: peoplePhrase(tribe) })
+        : t("{leader} alla guida {di:people}", {
+            leader: formatLeaderTitle(leader, tribe.government, identityOf(ctx.state, tribe.identityId)),
+            people: peoplePhrase(tribe),
+          }),
     description: `${leader.name}, ${leader.age} anni, ${how} presso ${describePlace(ctx.state, leader.x, leader.y)}${
       previous ? `, dopo ${previous.name}` : ""
     }.`,
@@ -295,8 +307,14 @@ function successionCrisis(ctx: SimContext, tribe: Tribe, previous: Person) {
     actors: [actor.tribe(tribe), actor.person(previous)],
     x: tribe.x,
     y: tribe.y,
-    title: `Crisi di successione tra i ${tribe.name}`,
-    description: `Alla morte di ${previous.name} non è rimasto nessun erede riconosciuto: tra i ${tribe.name} si apre una lotta per il comando.`,
+    title: t("Crisi di successione presso {art:people}", { people: peoplePhrase(tribe) }),
+    description: t(
+      "Alla morte di {previous} non è rimasto nessun erede riconosciuto: presso {art:people} si apre una lotta per il comando.",
+      {
+        previous: previous.name,
+        people: peoplePhrase(tribe),
+      },
+    ),
     metadata: {
       previousLeaderId: previous.id,
       dynastyId: dynasty?.id ?? null,

@@ -30,6 +30,9 @@ export const EVENT_TYPES = [
   "culture",
   "settlement_growth",
   "civilization_transformed",
+  "vassalage",
+  "occupation",
+  "fusion",
 ] as const;
 
 const mapSize = z.coerce.number().int().min(MIN_MAP_SIZE).max(MAX_MAP_SIZE);

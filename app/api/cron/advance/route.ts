@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 import { listRunningWorldIds } from "@/lib/db/queries";
-import { simulateWorldService } from "@/lib/services/world-service";
+import { resumePendingDeletionsService, simulateWorldService } from "@/lib/services/world-service";
 import { cronConfig } from "@/lib/config";
 import { errorResponse, ok } from "@/lib/utils/api";
 import { AppError } from "@/lib/utils/errors";
@@ -27,6 +27,11 @@ export async function GET(request: Request) {
       throw new AppError("UNAUTHORIZED", "Cron non autorizzato o non configurato");
     }
     const db = await getDb();
+    // Deletions nobody is polling any more (tab closed) are finished here, one short slice each.
+    const deletions = await resumePendingDeletionsService(2, { db, budgetMs: 10_000 }).catch((error) => {
+      logger.warn("cron.deletions_failed", errorDetails(error));
+      return [];
+    });
     const ids = await listRunningWorldIds(db, config.worldsPerRun);
     const results: { worldId: string; ok: boolean; ticks?: number; error?: string }[] = [];
     for (const worldId of ids) {
@@ -49,7 +54,10 @@ export async function GET(request: Request) {
       failed: results.filter((r) => !r.ok).length,
       durationMs: Date.now() - started,
     });
-    return ok({ advanced: results });
+    return ok({
+      advanced: results,
+      deletions: deletions.map((d) => ({ worldId: d.worldId, status: d.status, progress: d.progress })),
+    });
   } catch (error) {
     return errorResponse(error);
   }

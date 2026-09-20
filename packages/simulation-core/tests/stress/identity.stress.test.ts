@@ -29,7 +29,12 @@ function unannounced(state: WorldState, events: HistoricalEvent[]): string[] {
   const founders = new Set(state.roster?.entries.map((e) => e.tribeId));
   const announced = new Set(
     events
-      .filter((e) => (e.type === "migration" && e.subtype === "split") || e.subtype === "secession")
+      .filter(
+        (e) =>
+          (e.type === "migration" && e.subtype === "split") ||
+          e.subtype === "secession" ||
+          e.type === "fusion",
+      )
       .flatMap((e) => e.actors.map((a) => a.id)),
   );
   return state.tribes.filter((t) => !founders.has(t.id) && !announced.has(t.id)).map((t) => t.name);
@@ -54,9 +59,14 @@ describe("stress delle identità storiche", () => {
       expect(unannounced(state, events), seed).toEqual([]);
       const allNames = state.tribes.map((t) => t.name);
       expect(new Set(allNames).size, `${seed}: nomi duplicati`).toBe(allNames.length);
-      // No identity outside the founding roster ever shows up.
+      // No identity outside the founding roster ever shows up (except composites born in-world).
       const rostered = new Set(state.roster!.entries.map((e) => e.identityId));
-      expect(state.tribes.every((t) => t.identityId !== null && rostered.has(t.identityId))).toBe(true);
+      const composites = new Set(state.composites.map((c) => c.id));
+      expect(
+        state.tribes.every(
+          (t) => t.identityId !== null && (rostered.has(t.identityId) || composites.has(t.identityId)),
+        ),
+      ).toBe(true);
     }
   });
 

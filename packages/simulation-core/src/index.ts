@@ -49,6 +49,12 @@ export {
   type CreateWorldOptions,
 } from "./world-generator";
 export * from "./identity";
+export * from "./placement";
+export * from "./politics";
+export * from "./fusion";
+export * from "./identity/composite";
+export * from "./language/italian";
+export * from "./language/format";
 export { generateTerrain, computeHabitability } from "./terrain";
 export {
   runSimulation,

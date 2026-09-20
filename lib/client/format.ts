@@ -47,6 +47,9 @@ export const EVENT_LABELS: Record<string, string> = {
   culture: "Cultura",
   settlement_growth: "Crescita urbana",
   civilization_transformed: "Trasformazione politica",
+  vassalage: "Vassallaggio",
+  occupation: "Occupazione",
+  fusion: "Fusione di popoli",
 };
 
 export const IMPORTANCE_LABELS: Record<number, string> = {
@@ -119,6 +122,43 @@ export const DIPLOMATIC_LABELS: Record<string, string> = {
   rival: "Rivali",
   war: "In guerra",
   truce: "Tregua",
+  vassalage: "Vassallaggio",
+  occupation: "Occupazione",
+};
+
+export const TRIBUTE_LABELS: Record<string, string> = {
+  light: "tributo leggero",
+  standard: "tributo ordinario",
+  heavy: "tributo pesante",
+};
+
+export const VASSAL_STATUS_LABELS: Record<string, string> = {
+  active: "Vassallo",
+  rebellion: "In rivolta",
+  ended: "Concluso",
+};
+
+export const VASSAL_END_LABELS: Record<string, string> = {
+  independence: "indipendenza",
+  rebellion_won: "ribellione vittoriosa",
+  extinct: "estinzione",
+  merged: "fusione",
+};
+
+export const OCCUPATION_POLICY_LABELS: Record<string, string> = {
+  military: "militare",
+  administrative: "amministrativa",
+  extractive: "estrattiva",
+  integrative: "integrativa",
+};
+
+export const OCCUPATION_STATUS_LABELS: Record<string, string> = {
+  active: "In corso",
+  annexed: "Annessa",
+  liberated: "Liberata",
+  autonomous: "Autonoma",
+  returned: "Restituita",
+  abandoned: "Abbandonata",
 };
 
 export const PHASE_LABELS: Record<string, string> = {
@@ -210,6 +250,7 @@ export const STATUS_LABELS: Record<string, string> = {
   collapsed: "Crollata",
   running: "In corso",
   paused: "In pausa",
+  deleting: "In eliminazione",
 };
 
 export function eventTone(type: string): "war" | "growth" | "ochre" | "water" | "neutral" {
@@ -218,6 +259,7 @@ export function eventTone(type: string): "war" | "growth" | "ochre" | "water" | 
       "conflict",
       "battle",
       "conquest",
+      "occupation",
       "famine",
       "settlement_collapse",
       "tribe_extinct",
@@ -237,7 +279,17 @@ export function eventTone(type: string): "war" | "growth" | "ochre" | "water" | 
     ].includes(type)
   )
     return "growth";
-  if (["tech_discovered", "construction", "leadership", "culture", "civilization_transformed"].includes(type))
+  if (
+    [
+      "tech_discovered",
+      "construction",
+      "leadership",
+      "culture",
+      "civilization_transformed",
+      "vassalage",
+      "fusion",
+    ].includes(type)
+  )
     return "ochre";
   if (["trade", "peace", "alliance", "migration", "climate"].includes(type)) return "water";
   return "neutral";

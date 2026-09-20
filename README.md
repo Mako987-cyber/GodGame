@@ -32,12 +32,14 @@ prodotto, e l'interfaccia li mostra nel pannello «Perché è successo?».
 8. [Architettura](#architettura) · [Schermata del mondo](#schermata-del-mondo) ·
    [Mappa esagonale](#mappa-esagonale) · [Mappa isometrica (classica)](#mappa-isometrica-classica) ·
    [Eliminazione di un mondo](#eliminazione-di-un-mondo)
-9. [Modello di simulazione](#modello-di-simulazione) · [Identità storiche](#identità-storiche)
+9. [Modello di simulazione](#modello-di-simulazione) · [Identità storiche](#identità-storiche) ·
+   [Vassallaggi e occupazioni](#vassallaggi-e-occupazioni) · [Fusioni](#fusioni-e-identità-composite)
 10. [API](#api)
 11. [Prestazioni](#prestazioni)
 12. [Scalabilità](#scalabilità)
-13. [Limiti noti e trade-off](#limiti-noti-e-trade-off)
-14. [Roadmap tecnica](#roadmap-tecnica)
+13. [Limiti attuali](#limiti-attuali)
+14. [Prossima milestone](#prossima-milestone)
+15. [Roadmap tecnica](#roadmap-tecnica)
 
 ---
 
@@ -138,6 +140,9 @@ Tabelle principali:
 | `dynasties`                                                      | famiglie regnanti: fondatore, anni, numero di guide, prestigio                                                                                                              |
 | `world_snapshots`                                                | stato completo a tick 0 e ogni `observability.snapshotInterval` tick (conservati gli ultimi 3 più lo 0)                                                                     |
 | `simulation_locks`, `simulation_runs`                            | lock per mondo e log di ogni batch (durata, esito, errori)                                                                                                                  |
+| `vassal_relationships`, `occupations`                            | rapporti di vassallaggio e occupazioni di insediamenti, attivi e conclusi (mai cancellati finché il mondo esiste)                                                           |
+| `composite_identities`                                           | identità nate da fusioni nel mondo; indice univoco `(world_id, member_key)`: la stessa combinazione non può esistere due volte                                              |
+| `world_deletion_jobs`                                            | stato di ogni eliminazione (fase, righe per tabella, progresso, lease, errore); senza FK: sopravvive al mondo eliminato                                                     |
 
 Le migrazioni applicate finora:
 
@@ -145,6 +150,14 @@ Le migrazioni applicate finora:
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0000_init.sql`      | schema iniziale (mondi, celle, tribù, persone, insediamenti, civiltà, relazioni, eventi, statistiche, snapshot, lock, run)                                                                                                                                                                                                                                                                                                                                                             |
 | `0001_evolution.sql` | **solo aggiunte**: colonne di clima/config/crisi sui mondi, giacimenti e pascoli sulle celle, cultura, governo, stabilità, distribuzione e adozione tecnologica sulle tribù, prestigio/istruzione/ricchezza/dinastia sulle persone, livello urbano, igiene, malcontento e influenza sugli insediamenti, rispetto/dipendenza/stato/fase sulle relazioni, sottotipo e catene causali sugli eventi, 14 nuove metriche su `world_stats`, più le tabelle `dynasties` e `civilization_stats` |
+
+| `0002_identities.sql` | **solo aggiunte**: identità storiche su tribù e civiltà, roster sul mondo, indici `(world_id, identity_id)` e `(world_id, status)` |
+| `0003_world_deletion_jobs.sql` | **solo aggiunte**: tabella `world_deletion_jobs` e i suoi indici (uno univoco parziale: al massimo un job aperto per mondo). `worlds.status` è testo, quindi il valore `deleting` non richiede DDL |
+| `0004_civilization_name_pattern.sql` | **solo aggiunte**: colonna nullable `civilizations.name_pattern` (gli stati esistenti restano `NULL` = regola di nome precedente) |
+| `0005_political_relations.sql` | **solo aggiunte**: tabelle `vassal_relationships`, `occupations`, `composite_identities` (FK `CASCADE`, indicizzate) e colonna `relationships.fusion_years` con default 0 |
+
+Nessuna migrazione contiene `DROP`, `TRUNCATE` né `ALTER … DROP COLUMN`, e nessuna esegue `UPDATE` di massa.
+Ogni file inizia con un commento che ne dichiara la natura non distruttiva e il rollback manuale possibile.
 
 `0001_evolution.sql` non contiene `DROP`, `TRUNCATE` né `ALTER … DROP COLUMN`: ogni colonna nuova è nullable
 oppure ha un valore di default, quindi si applica senza rischi anche a un database già popolato.
@@ -164,7 +177,8 @@ Scelte:
 
 ## Compatibilità dei mondi esistenti
 
-Lo stato del mondo ha una **versione** (`worlds.simulation_version`, oggi `2`) e un formato di serializzazione
+Lo stato del mondo ha una **versione** (`worlds.simulation_version`, oggi `3`: occupazioni e vassallaggi
+espliciti, fusioni, testi grammaticali, fasce di posizionamento) e un formato di serializzazione
 versionato (`STATE_VERSION`). Un mondo creato da una versione precedente del motore viene completato al
 caricamento da `packages/simulation-core/src/normalize.ts`:
 
@@ -177,6 +191,11 @@ caricamento da `packages/simulation-core/src/normalize.ts`:
 
 Il tutto è coperto da `packages/simulation-core/tests/compatibility.test.ts`, che costruisce uno stato in
 formato 1 rimuovendo ogni campo introdotto dopo, lo ricarica e continua a simulare verificando gli invarianti.
+Un secondo caso simula un mondo della versione 2 (senza vassallaggi, occupazioni, fusioni, `fusion_years`,
+`name_pattern` né rapporto di posizionamento): si carica con liste vuote e default, **nessun nome di popolo o
+di stato cambia**, nessuna identità (tanto meno moderna) viene assegnata retroattivamente, e la simulazione
+prosegue. I mondi esistenti restano `legacy`/`procedural`; una conversione manuale dei dati storici non è
+prevista né eseguita automaticamente (servirebbero backup e anteprima espliciti).
 
 La migrazione `0002_identities` è **additiva e non distruttiva**: aggiunge `identity_id`, `identity_type`
 (default `'legacy'`), `absorbed_identity_ids` e `absorbed_by_tribe_id` a `tribes`, `identity_id`,
@@ -203,7 +222,9 @@ continua a funzionare sulle stesse tabelle (le colonne nuove restano inutilizzat
 
 ```bash
 npm test                # Vitest: core + integrazione DB (PGlite in memoria) + API
-npm run test:simulation # stress del motore: 250 tick con invarianti a ogni tick, 10 semi, performance
+npm run test:simulation # stress del motore: invarianti, 20 seed × mappe piccole/medie/grandi, 100–250 tick
+npm run test:world-delete  # eliminazione dei mondi (PGlite; + Postgres reale se TEST_DATABASE_URL è impostata)
+npm run diagnose:world-delete -- --world-id <uuid>  # diagnosi in sola lettura di un'eliminazione
 npm run test:all        # entrambe le suite
 npm run lint            # ESLint (config Next core-web-vitals + TypeScript)
 npm run typecheck       # tsc --noEmit (strict, noUncheckedIndexedAccess)
@@ -249,10 +270,21 @@ Cosa coprono i test (`packages/simulation-core/tests`, `tests/`):
   filtri eventi (periodo, tipo, importanza, protagonista, ricerca testuale con wildcard SQL neutralizzate),
   identificativi di persona non validi, cron non autorizzato, nessuno stack trace nelle risposte.
 
+Test aggiunti con identità moderne, fusioni, vassallaggi/occupazioni, linguaggio e posizionamento:
+`identity-modern.test.ts` (catalogo moderno, partenza uniforme dichiarata, filtri per epoca, «Italiani in un
+mondo preistorico»), `fusion.test.ts`, `politics.test.ts`, `language.test.ts` (articoli, preposizioni,
+singolare/plurale, identità storiche, legacy, composite, forme politiche, leader, eventi e uno _sweep_ sui
+testi reali del motore), `placement.test.ts`, `tests/politics-persistence.test.ts` (persistenza, API, stati di
+continuità, indice univoco delle composite, cancellazione), `tests/world-deletion*.test.ts` (vedi
+[Eliminazione](#eliminazione-di-un-mondo)).
+
 La suite di stress (`npm run test:simulation`) aggiunge: 250 tick con controllo di integrità **dopo ogni tick**,
 assenza di `Math.random` in tutto il package di simulazione, nessun evento duplicato o orfano su 300 tick,
 determinismo su 250 tick, nessun mondo che si estingue prematuramente su 10 semi diversi e i due budget di
-prestazione (generazione del mondo e batch da 10 tick sotto i 3 secondi).
+prestazione (generazione del mondo e batch da 10 tick sotto i 3 secondi). La **matrice di stress**
+(`matrix.stress.test.ts`) esegue 20 seed su mappe 24×24 (150 tick), 20 seed su 48×48 con identità moderne
+(200 tick), 3 mondi 96×96 (250 tick) e 8 mondi procedurali/legacy (200 tick), con invarianti ogni 25 tick
+(incluse quelle politiche e di continuità delle identità) e controllo dei testi generati.
 
 ## Deploy su Vercel con Supabase
 
@@ -757,9 +789,13 @@ partner commerciali, alleati, rivali, guerra, tregua) e fase del conflitto.
   terreno · logistica · comando, moltiplicata per un tiro seedato in [0,75; 1,25]. Le mura trasformano l'assalto
   in assedio; la distanza dalla base penalizza l'attaccante. Il perdente perde il 10–40% dei combattenti, il
   vincitore il 3–12%. Seguono saccheggio (con distruzione di edifici), calo del morale e della legittimità e,
-  con vittoria netta su un insediamento indebolito, **occupazione**: la popolazione e il territorio passano al
-  vincitore, che acquisisce anche le tecnologie dei vinti.
-- La pace arriva per stanchezza o sfinimento, con una tregua di 20–40 anni.
+  con vittoria netta su un insediamento indebolito, **occupazione** esplicita: l'insediamento resta del
+  proprietario finché l'occupazione non si risolve in annessione, liberazione, autonomia o restituzione (vedi
+  [Vassallaggi e occupazioni](#vassallaggi-e-occupazioni)). Solo con l'annessione popolazione e territorio
+  passano al vincitore, che acquisisce anche le tecnologie dei vinti. I vassalli inviano una leva alle battaglie
+  del signore.
+- La pace arriva per stanchezza o sfinimento, con una tregua di 20–40 anni; imposta da un vincitore molto più
+  forte può trasformare il vinto in vassallo.
 
 ### Crisi, epidemie e collassi
 
@@ -826,11 +862,133 @@ registra `parent_tribe_id` ("Egizi del Nord", "Egizi di Naru"). Per questo non e
 
 Le fini di un popolo sono sempre raccontate da un evento: `tribe_extinct` (estinzione), `migration/absorption`
 (assorbimento, con `absorbed_by_tribe_id` e l'identità conservata in `absorbed_identity_ids` dell'ospite),
-`conquest` (l'identità dei vinti entra fra quelle assorbite dal conquistatore), `civilization_transformed/collapse`
+`conquest/annexation` (alla fine di un'occupazione: l'identità dei vinti entra fra quelle assorbite dal
+conquistatore), `fusion` (i popoli d'origine diventano `merged` in un'identità composita), `civilization_transformed/collapse`
 (fine di uno stato). Lo stato (`civilizations`) eredita l'identità della tribù fondatrice e prende un **nome
 politico** che dipende dal governo raggiunto e da un luogo del mondo ("Confederazione di Naru" → "Regno di
 Naru"): ogni cambio genera un evento `civilization_transformed/government` e il nome precedente resta in
 `former_names`.
+
+### Catalogo: 30 identità, 10 dell'età moderna
+
+Il catalogo (`identity/catalog.ts`, versione `2026.09-2`) contiene 20 identità antiche, classiche, medievali
+e indigene e **10 dell'età moderna e contemporanea**: Francesi, Inglesi, Spagnoli, Portoghesi, Ottomani
+(`early_modern`), Italiani, Tedeschi, Russi, Etiopi, Statunitensi (`modern`). Cinesi, Indiani e Giapponesi
+erano già presenti come identità uniche e non sono stati duplicati.
+
+Le identità moderne sono **sandbox culturali/visive, non stati già formati**: possono comparire in un mondo
+preistorico, partono esattamente come le altre (pietra, accampamento, clan), non ricevono tecnologie, governi o
+città moderne, e **non hanno modificatori comportamentali** (gli stereotipi nazionali non sono una meccanica di
+gioco). Ogni voce lo dichiara nelle `representationNotes`, e la UI mostra l'avviso «Identità dell'età moderna:
+ispirazione culturale e visiva, non uno stato moderno già formato». Un test crea gli **Italiani in un mondo
+preistorico** e verifica: utensili di pietra, accampamento, nessuna scrittura né agricoltura, nessuna tecnologia
+moderna, leader procedurale (mai un nome riservato), tecnologie successive solo da eventi del mondo, storie
+diverse con seed diversi e identiche con lo stesso seed.
+
+Filtri per epoca nella UI e in `GET /api/historical-identities?era=`: antiche, classiche, medievali,
+**moderne** (`early_modern` + `modern`), indigene, regionali (oggi vuota, filtro disabilitato con conteggio 0).
+
+Ogni identità dichiara esplicitamente la partenza comune (`uniformStart`: `defaultGovernment: "clan"`,
+`startingTechnologies: ["stone_tools"]`, `startingInfrastructure: ["camp"]`, `startingPopulationRange:
+[15, 40]`): lo schema Zod accetta **solo** questi valori letterali, e `STARTING_CIVILIZATION_STATE` deriva
+dalla stessa costante.
+
+### Linguaggio naturale
+
+Ogni identità ha un profilo grammaticale (`language`: `singularNoun`, `pluralNoun`, `adjective`,
+`adjectiveFeminine`, `collectiveName`, `articleGender`, `politicalNamePatterns`, `leaderTitlePatterns`,
+`settlementNamePatterns`) e il motore scrive i testi con template controllati
+(`language/italian.ts`, `language/format.ts`): ogni popolo, stato, leader o insediamento è un _sintagma
+nominale_ con genere e numero, quindi articoli, preposizioni articolate e verbi concordano sempre.
+
+- Popoli storici e compositi: plurale con articolo («**Gli Egizi** hanno fondato…», «dagli Inca», «dei
+  Romano-Celti»). Mai «la tribù Egizi».
+- Popoli procedurali/legacy: il nome inventato resta il nome di una tribù, al singolare («**La tribù Kanar** è
+  nata», «della tribù Kanar»).
+- Stati: il genere viene dalla forma politica («**Il Regno di Naru** ha dichiarato guerra **alla Lega
+  Romana**», «Crolla il Regno…»). In diplomazia agisce lo stato se esiste, altrimenti il popolo.
+- Leader: titolo dal governo prodotto dalla simulazione («re Menka», «regina Iria», «Menka, guida del clan»).
+- I nuovi stati di un popolo storico scelgono (in modo deterministico, da un flusso derivato da seed + id) un
+  pattern del profilo: «{forma} di {capitale}» oppure «{forma} {aggettivo}» con accordo («Regno Egizio»,
+  «Lega Egizia»); il pattern è salvato in `name_pattern` e riapplicato al cambio di governo. Gli stati
+  esistenti non cambiano nome.
+- API: `formatCivilizationName`, `formatCivilizationSubject`, `formatPoliticalEntityName`,
+  `formatLeaderTitle`, `formatEventDescription` (template con `{Art:x}`, `{di:x}`, `{v:x:singolare|plurale}`;
+  un parametro mancante è un errore, mai un «{x}» nel testo).
+
+### Posizionamento iniziale: fasce di qualità esplicite
+
+`placement.ts` definisce una `PlacementQualityBand` per dimensione di mappa (piccola < 40×40, grande ≥ 72×72):
+
+| Mappa   | Fascia preferita (qualità minima · scarto massimo) | Fascia di ripiego | Soglia di avviso |
+| ------- | -------------------------------------------------- | ----------------- | ---------------- |
+| grande  | ≥ 0,55 · ≤ 0,05                                    | ≥ 0,45 · ≤ 0,12   | 0,50             |
+| media   | ≥ 0,50 · ≤ 0,08                                    | ≥ 0,42 · ≤ 0,18   | 0,47             |
+| piccola | ≥ 0,45 · ≤ 0,12                                    | ≥ 0,40 · ≤ 0,25   | 0,44             |
+
+Il motore prova prima la fascia preferita (acqua per tutti, distanza ampia), poi quella di ripiego, infine
+nessun bilanciamento; mai celle d'oceano, montagna o poco abitabili. Il posizionamento usa un flusso proprio
+(`deriveRng(seed, "placement")`): è deterministico e non sposta il PRNG della simulazione. Le celle scelte
+ruotano di un offset seedato, così il primo slot del roster non riceve sistematicamente il posto migliore
+(verificato su 20 seed). Il roster registra per ogni partenza qualità, acqua, fertilità, risorse, penalità
+climatica, distanza dalla partenza più vicina e `placementFallback`; il mondo registra fascia, livello usato,
+numero di ripieghi, distanza minima e intervallo di qualità. La UI mostra un avviso sulle partenze di ripiego e
+il riepilogo nelle informazioni del mondo. Nessun mondo esistente viene modificato retroattivamente.
+
+### Vassallaggi e occupazioni
+
+Una vittoria decisiva su un insediamento **non** lo annette più: crea un'**occupazione** (`occupations`).
+L'insediamento resta del proprietario, gli abitanti conservano la loro identità; l'occupante paga la guarnigione
+(cibo in base alla distanza), preleva secondo la propria politica (militare, amministrativa, estrattiva,
+integrativa — scelta dalla sua cultura), e controllo e resistenza evolvono ogni anno (forza relativa, politica,
+distanza culturale, malcontento, vicinanza del proprietario). Esiti: **annessione** dopo anni di controllo saldo
+(solo allora l'insediamento passa di mano e l'identità dei vinti entra fra quelle assorbite), **liberazione**
+se la resistenza prevale, **autonomia** negoziata dopo una lunga occupazione senza controllo, **restituzione**
+con una pace di vassallaggio, abbandono se l'occupante scompare. Un'occupazione mal gestita aumenta la
+tensione e riduce la legittimità dell'occupante.
+
+Una pace imposta da un vincitore almeno **due volte più forte**, che occupa insediamenti del vinto o ha vinto
+molte battaglie, crea un **vassallaggio** (`vassal_relationships`): il vassallo conserva identità, capitale,
+cultura e guida, paga un tributo (leggero/ordinario/pesante secondo la centralizzazione del signore, ridotto
+dall'autonomia, con perdite di trasporto), invia una leva alle battaglie del signore nel raggio di 15 celle
+(le perdite ricadono sulle sole forze proprie) e non entra nella scala di escalation con il signore. L'autonomia
+cresce con la forza relativa e la distanza: al massimo diventa **indipendenza** pacifica; un vassallo forte e
+risentito può **ribellarsi** (la relazione passa in guerra), e alla pace la ribellione è vinta (indipendenza) o
+repressa (meno autonomia, tributo pesante). Un popolo ha un solo signore alla volta, non può essere vassallo di
+sé stesso né, direttamente o indirettamente, del proprio vassallo (invarianti verificati a ogni tick).
+
+Stati diplomatici espliciti: `vassalage` e `occupation`. Stati di continuità esposti dall'API civiltà:
+`active`, `successor`, `vassal`, `occupied`, `absorbed`, `merged`, `dissolved`. Tutto è visibile nei pannelli
+del popolo e dell'insediamento, nella diplomazia e nella cronologia (eventi `vassalage/*`, `occupation/*`,
+`conquest/annexation`). Misura su 20 seed × 250 tick (mappe 48×48, 8 civiltà): **67 occupazioni**, 43 chiuse
+con restituzione e **12 sfociate in annessione**, **81 vassallaggi**, 10 ribellioni (4 vinte, 6 represse) e 2
+indipendenze, con **zero** violazioni degli invarianti.
+
+### Fusioni e identità composite
+
+Due popoli con identità **diverse** possono fondersi solo dopo condizioni persistenti: alleanza con fiducia ≥
+0,6 **oppure** un vassallaggio stretto (autonomia ≤ 0,3) da almeno 20 anni; in entrambi i casi distanza
+culturale ≤ 0,22, ostilità ≤ 0,15, vicinanza (≤ 8 celle), almeno 25 persone ciascuno, nessuna guerra o
+ribellione. Ogni anno idoneo aggiunge pressione a `relationships.fusion_years` (di più con un nemico comune o
+scambi intensi), ogni anno non idoneo la consuma; la fusione avviene solo dopo 30 anni di pressione **e** in un
+anno idoneo. Nessun tiro casuale: stessa situazione, stesso risultato.
+
+La fusione crea un'**identità composita** (`composite_identities`) e una nuova istanza politica che la porta:
+nome procedurale ma leggibile costruito dalla grammatica delle sorgenti (Romani + Celti → «**Romano-Celti**»,
+aggettivo «romano-celtico/a», stato «**Lega Romano-Celtica**»; il popolo più numeroso dà la testa del
+composto), fonetica fusa dei due profili, palette mescolata, emblema del popolo maggiore, cultura media pesata e
+unione dei tag. Conserva i riferimenti a tutte le identità e le istanze d'origine, che restano nel mondo come
+popoli `merged` (mai cancellati); persone, insediamenti, territorio, relazioni con terzi, vassallaggi e
+occupazioni passano alla nuova istanza (cicli ereditati spezzati). Un evento `fusion` racconta la nascita; la
+stessa combinazione di identità non può fondersi due volte nello stesso mondo (controllo nel motore **e** indice
+univoco nel database). Le composite non sono mai presentate come civiltà storiche: la UI le marca «Identità
+composita · generata dalla simulazione» ed elenca le identità e i popoli d'origine.
+
+**Frequenza reale.** Con la taratura attuale della diplomazia le fusioni sono **rare**: in 20 seed × 250 tick
+non se ne è prodotta nessuna, perché le alleanze non si formano mai (0 su ~7.700 osservazioni di coppie: la
+soglia di fiducia 0,7 dell'alleanza non viene raggiunta) e nei vassallaggi il tributo mantiene l'ostilità alta
+(0,5–1,0). Le soglie non sono state abbassate per forzare fusioni fra popoli che si detestano: il motore è
+pronto e testato, la taratura della diplomazia è nella prossima milestone.
 
 ### Partenza uniforme
 
@@ -867,10 +1025,9 @@ Il roster viene estratto **una sola volta**, in `createWorld`, da un flusso deri
 sono normalizzate nell'ordine del catalogo, quindi la stessa scelta in ordine diverso produce lo stesso mondo.
 Chi parte dove è una permutazione indipendente dalle identità: nessuno viene messo nella "propria" regione storica.
 
-Con `balancedPlacement` (default) ogni punto di partenza ha acqua a portata (fiume, costa o cella ben irrigata)
-e una qualità del territorio dentro una fascia stretta, la migliore che la mappa riesce a offrire con la
-distanza minima richiesta; qualità e accesso all'acqua di ogni partenza sono registrati nel roster. Le
-differenze che restano non vengono compensate durante la partita: fanno parte del mondo.
+Con `balancedPlacement` (default) i punti di partenza seguono le fasce di qualità descritte in
+[Posizionamento iniziale](#posizionamento-iniziale-fasce-di-qualità-esplicite); le differenze che restano non
+vengono compensate durante la partita: fanno parte del mondo.
 
 ### Leader, titoli e nomi
 
@@ -898,27 +1055,34 @@ ancora usato, profilo dei nomi con i nomi riservati, fonti e note; poi aumentare
 
 Tutte le risposte hanno la forma `{ "data": … }` oppure `{ "error": { "code", "message", "details?" } }`.
 
-| Metodo   | Percorso                                       | Note                                                                                                                                                          |
-| -------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST`   | `/api/worlds`                                  | `{ name, seed?, width?, height?, roster? }` (24–96). Genera mappa, roster, popoli e popolazione. 201 → `{ worldId, world }`                                   |
-| `GET`    | `/api/worlds`                                  | elenco dei mondi con riepilogo                                                                                                                                |
-| `GET`    | `/api/worlds/:id`                              | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo         |
-| `PATCH`  | `/api/worlds/:id`                              | `{ status: "running" \| "paused" }`                                                                                                                           |
-| `DELETE` | `/api/worlds/:id`                              | `{ confirmation: "ELIMINA <nome>", worldName }`: elimina il mondo e tutti i suoi dati (vedi [Eliminazione](#eliminazione-di-un-mondo)) → conteggi per tabella |
-| `POST`   | `/api/worlds/:id/simulate`                     | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                         |
-| `GET`    | `/api/worlds/:id/events`                       | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                    |
-| `GET`    | `/api/worlds/:id/stats`                        | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                        |
-| `GET`    | `/api/worlds/:id/people/:personId`             | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                                 |
-| `GET`    | `/api/worlds/:id/civilizations`                | popoli del mondo (istanze politiche): identità, stato, leader con titolo, stato politico, predecessori/successori, identità assorbite                         |
-| `GET`    | `/api/worlds/:id/civilizations/:civId`         | scheda: identità, fondazione (tick 0, leader iniziale, tecnologia iniziale, qualità della partenza), primo insediamento, `realHistoryApplied: false`          |
-| `GET`    | `/api/worlds/:id/civilizations/:civId/history` | storia generata: eventi paginati (`page`, `pageSize`), tecnologie in ordine di scoperta, eventi di guida                                                      |
-| `GET`    | `/api/historical-identities`                   | catalogo: `search` (nome, alias, regione), `category`, `continent`, `page`, `pageSize` (≤ 50). Cache pubblica                                                 |
-| `GET`    | `/api/historical-identities/:key`              | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                               |
-| `GET`    | `/api/cron/advance`                            | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                               |
+| Metodo   | Percorso                                       | Note                                                                                                                                                       |
+| -------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/worlds`                                  | `{ name, seed?, width?, height?, roster? }` (24–96). Genera mappa, roster, popoli e popolazione. 201 → `{ worldId, world }`                                |
+| `GET`    | `/api/worlds`                                  | elenco dei mondi con riepilogo                                                                                                                             |
+| `GET`    | `/api/worlds/:id`                              | stato e clima, mappa a colonne, tribù (cultura, governo, stabilità), insediamenti, civiltà, relazioni, tecnologie, dinastie, crisi, figure di rilievo      |
+| `PATCH`  | `/api/worlds/:id`                              | `{ status: "running" \| "paused" }`                                                                                                                        |
+| `DELETE` | `/api/worlds/:id`                              | `{ confirmation: "ELIMINA <nome>", worldName }`: 200 eliminato e verificato, 202 in corso (vedi [Eliminazione](#eliminazione-di-un-mondo))                 |
+| `GET`    | `/api/worlds/:id/deletion`                     | stato dell'ultima eliminazione del mondo (job, fase, progresso, righe per tabella)                                                                         |
+| `POST`   | `/api/worlds/:id/deletion`                     | prosegue un'eliminazione già confermata per un budget di tempo (idempotente): 200 completata, 202 in corso                                                 |
+| `POST`   | `/api/worlds/:id/simulate`                     | `{ ticks: 1 \| 10 \| 50 \| 100 }` → riepilogo, eventi principali, metriche, `partial`                                                                      |
+| `GET`    | `/api/worlds/:id/events`                       | `page`, `pageSize` (≤ 100), `type` (lista separata da virgole), `minImportance`, `fromYear`, `toYear`, `actorId`, `search`                                 |
+| `GET`    | `/api/worlds/:id/stats`                        | `{ world, civilizations }`; `maxPoints` (campionamento), `civilizations=true` per la serie per civiltà                                                     |
+| `GET`    | `/api/worlds/:id/people/:personId`             | dettaglio di una persona: condizione, abilità, indole, famiglia, dinastia, conoscenze, eventi                                                              |
+| `GET`    | `/api/worlds/:id/civilizations`                | popoli del mondo (istanze politiche): identità, stato, leader con titolo, stato politico, predecessori/successori, identità assorbite                      |
+| `GET`    | `/api/worlds/:id/civilizations/:civId`         | scheda: identità, fondazione (tick 0, leader iniziale, tecnologia iniziale, qualità della partenza), primo insediamento, `realHistoryApplied: false`       |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/history` | storia generata: eventi paginati (`page`, `pageSize`), tecnologie in ordine di scoperta, eventi di guida                                                   |
+| `GET`    | `/api/historical-identities`                   | catalogo: `search` (nome, alias, regione), `era` (ancient, classical, medieval, modern, indigenous, regional), `category`, `continent`, `page`, `pageSize` |
+| `GET`    | `/api/historical-identities/:key`              | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                            |
+| `GET`    | `/api/cron/advance`                            | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                            |
 
 Codici di errore: `INVALID_INPUT` 400, `TICKS_NOT_ALLOWED` 400, `NOT_FOUND` 404, `SIMULATION_IN_PROGRESS` 409,
-`WORLD_RUNNING` 409, `CONFIRMATION_MISMATCH` 422, `FORBIDDEN` 403, `TIMEOUT` 504, `DATABASE_ERROR` 500,
-`UNAUTHORIZED` 401, `INTERNAL` 500.
+`WORLD_RUNNING` 409, `WORLD_BUSY` 409 (lock sul mondo non ottenuto entro `lock_timeout`), `CONFIRMATION_MISMATCH`
+422, `FORBIDDEN` 403, `TIMEOUT` 504 (statement timeout del database, mai un'attesa infinita), `DATABASE_ERROR`
+500, `DELETION_FAILED` 500, `UNAUTHORIZED` 401, `INTERNAL` 500. Gli errori delle rotte di eliminazione
+includono `requestId` (anche nell'header `x-request-id`) per ritrovare i log.
+
+`GET /api/worlds/:id` include anche `vassalages`, `occupations` e `composites` (con `sourceNames`), e il
+roster con il rapporto di posizionamento.
 
 Non esiste un endpoint per aggiungere civiltà a un mondo esistente: il roster è assegnato solo alla creazione.
 Le nuove risposte sono validate anche in uscita con gli schemi Zod di `lib/validation/identity.ts`.
@@ -931,36 +1095,114 @@ parametro con i caratteri jolly SQL neutralizzati, e nessuna risposta espone sta
 
 Operazione distruttiva, mai automatica: parte solo da un dialog esplicito e passa da controlli lato server.
 
-**Grafo delle dipendenze** (verificato su `schema.ts` e sulle migrazioni): tutte le tabelle di un mondo hanno
-`world_id → worlds.id ON DELETE CASCADE` — `world_cells`, `tribes`, `households`, `people`, `settlements`,
-`civilizations`, `world_technologies`, `relationships`, `historical_events`, `world_stats`, `world_snapshots`,
-`dynasties`, `civilization_stats`, `simulation_runs`, `simulation_locks`. Gli id interni (`t3`, `s5`, `p12`…)
-stanno in chiavi `(world_id, id)`, quindi nessuna riga può riferirsi a un altro mondo. `technologies` è il
-catalogo globale condiviso: **non viene mai toccato**. Non esistono file o oggetti Storage legati ai mondi.
-Nessuna migrazione è stata necessaria.
+#### L'errore HTTP 504: analisi, causa e correzione
 
-**Strategia** (`deleteWorldService` + `lib/db/world-deletion.ts`):
+**Sintomo.** In produzione l'eliminazione di mondi vecchi rispondeva 504 (la Function Vercel superava
+`maxDuration`, 60 s). I log Vercel e il database di produzione **non erano accessibili da questo ambiente**
+(nessuna CLI Vercel né credenziale): l'analisi è stata fatta sul codice, riprodotta in locale e verificata su
+Postgres 17 reale multi-connessione. I nuovi log strutturati (vedi sotto) permettono ora di confermarla
+anche in produzione.
 
-1. Zod valida `worldId` (UUID, altrimenti 404) e il corpo `{ confirmation, worldName }` (campi extra: 400).
-2. Se il mondo non esiste: 404 (una seconda richiesta non ha effetti).
-3. Controlli: proprietario (se `owner_id` è valorizzato serve quell'utente: una richiesta anonima riceve 403),
-   frase esatta `ELIMINA <nome>` e nome confrontati con quelli **salvati nel database** (422), mondo in pausa
-   (409 `WORLD_RUNNING`).
-4. Acquisizione del lock di simulazione del mondo: nessun batch può partire né essere in corso (409).
-5. Transazione: `SELECT … FOR UPDATE` sulla riga del mondo, nuova verifica dei controlli, conteggio ed
-   eliminazione di ogni tabella figlia filtrata per `world_id`, eliminazione del mondo, verifica che nessuna
-   tabella abbia più righe di quel mondo (altrimenti rollback), commit.
-6. Risposta: righe eliminate per tabella e totale (inclusa la riga di lock della cancellazione stessa).
-   Nessun SQL né stack trace nelle risposte; i fallimenti restituiscono `DATABASE_ERROR` senza modifiche.
+**Cosa è stato escluso, con misure:**
 
-La UI mostra nome, seed e cosa verrà eliminato, chiede di digitare `ELIMINA <nome>` (pulsante disabilitato
-finché non coincide), impedisce il doppio invio, mette in pausa un mondo in esecuzione, svuota la cache delle
-query del mondo e torna all'elenco. Aprire l'URL di un mondo eliminato mostra «Mondo non disponibile».
+| Ipotesi                                | Esito                                                                                                                                                                                           |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Volume di dati / cascata troppo grande | Un mondo 96×96 dopo 500 anni ha ~32.000 righe (≈30 MB, snapshot inclusi): eliminarlo richiede **79 ms** su PGlite; su Postgres reale un 96×96 dopo 300 anni si elimina in poche centinaia di ms |
+| Foreign key senza indice               | Tutte le FK `world_id` sono la prima colonna della chiave primaria: la cascata usa sempre un indice (verificato su `pg_constraint`/`pg_index` da un test e dallo script diagnostico)            |
+| Trigger lenti                          | Nessun trigger applicativo (verificato su `pg_trigger`)                                                                                                                                         |
+| Query N+1 / loop applicativo           | L'eliminazione era già set-based (una `DELETE … WHERE world_id` per tabella), ma faceva **tre passate** su ogni riga: `count(*)` prima, `DELETE`, ricontrollo finale                            |
+| Dati orfani / tabelle indirette        | Nessuna tabella con dati di un mondo fuori dal grafo `world_id → worlds.id ON DELETE CASCADE` (test d'audit)                                                                                    |
 
-I test (`tests/world-deletion.test.ts`) girano su un PGlite in memoria creato dal test: id non valido,
-mondo inesistente, conferma o nome errati, utente non autorizzato, mondo in esecuzione, lock preso,
-eliminazione completa senza orfani né effetti su altri mondi e sul catalogo, idempotenza, richieste
-concorrenti, rollback con un guasto iniettato da un trigger.
+**Causa radice (riprodotta).** Nessuna transazione impostava `lock_timeout`, `statement_timeout` o
+`idle_in_transaction_session_timeout`. Una Function interrotta o congelata a metà transazione (per esempio un
+`simulate` che supera il budget durante il salvataggio, che aggiorna la riga `worlds`) lascia la propria
+connessione, attraverso il pooler transazionale di Supabase, **idle in transaction con i lock presi**. La
+`DELETE` successiva esegue `SELECT … FOR UPDATE` sulla stessa riga e **attende senza limite**: su Postgres 17
+reale il test ha misurato `wait_event: transactionid` per tutta la durata, finché la piattaforma uccide la
+richiesta (504). Il tentativo fallito diventa a sua volta un nuovo "zombie": un nuovo tentativo riceve 409 per
+60 s (il lock di simulazione ancora valido) e poi si blocca di nuovo. Ecco perché i 504 colpivano sempre gli
+stessi mondi, quelli simulati di più. Aumentare `maxDuration` non avrebbe risolto nulla: l'attesa era infinita.
+
+**Correzione.**
+
+1. **Transazioni limitate ovunque** (`lib/db/tx.ts`, `boundedTransaction`): `lock_timeout`,
+   `statement_timeout` e `idle_in_transaction_session_timeout` impostati con `set_config(..., true)` (cioè
+   `SET LOCAL`, sicuro con il pooler) in eliminazione, salvataggio della simulazione, creazione del mondo e
+   acquisizione del lock. Un lock tenuto da una transazione orfana produce ora **409 `WORLD_BUSY` in ~3 s**,
+   e Postgres chiude da solo le sessioni che restano mute a metà transazione (nessun nuovo zombie).
+2. **Tombstone + job riprendibile** (`lib/db/world-deletion.ts`, tabella `world_deletion_jobs`):
+   - una transazione breve blocca la riga del mondo (con `lock_timeout`), ricontrolla conferma, proprietario,
+     stato e lock di simulazione, marca il mondo `deleting` e apre un job. Da quel momento il mondo è invisibile
+     a tutte le letture e scritture (dettaglio, simulazione, pausa/ripresa: 404) e compare nell'elenco solo
+     come "in eliminazione";
+   - l'epurazione avviene **a blocchi set-based** (`DELETE … WHERE world_id = $1 AND ctid = ANY(ARRAY(SELECT
+ctid … LIMIT n))`, piano `Tid Scan`), una transazione limitata per blocco, con il progresso del job
+     aggiornato **nella stessa transazione** del blocco (contabilità esatta anche dopo un crash);
+   - un **lease** con scadenza rende esclusiva ogni tranche e si libera da solo se la Function muore;
+   - ogni richiesta lavora al massimo `WORLD_DELETE_BUDGET_MS` (15 s): i mondi piccoli e medi finiscono
+     subito (200), un mondo enorme risponde 202 e viene ripreso dal client (`POST …/deletion`) o dal cron;
+   - ultimo passo: eliminazione della riga `worlds` (la cascata resta come rete di sicurezza) e verifica in
+     una sola query che nessuna tabella contenga più righe del mondo, poi job `completed`.
+3. **Osservabilità**: log JSON per fase (`world.delete.accepted`, `slice_start`, `batch`, `slice_paused`,
+   `transient_error`, `failed`, `completed`) con `worldId`, `jobId`, `requestId` (header `x-vercel-id`),
+   fase corrente, righe eliminate, durata e codice SQLSTATE; nessun segreto. Ogni risposta d'errore contiene
+   `requestId` (e l'header `x-request-id`), mai uno stack trace.
+
+**Contratto dell'endpoint** `DELETE /api/worlds/:id` (`{ confirmation: "ELIMINA <nome>", worldName }`):
+
+| Risposta               | Quando                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| 200 `completed: true`  | mondo e dati eliminati e verificati (conteggi per tabella, totale)                           |
+| 202 `completed: false` | confermato e in corso (mondo enorme o errore transitorio): riprendere dopo `retryAfterMs`    |
+| 400 / 404              | corpo non valido / mondo inesistente o già eliminato (idempotente)                           |
+| 403 / 422              | non proprietario / frase o nome errati — nessun dato toccato                                 |
+| 409                    | `WORLD_RUNNING`, `SIMULATION_IN_PROGRESS`, `WORLD_BUSY` (lock non ottenuto entro il timeout) |
+| 500 `DELETION_FAILED`  | errore non transitorio durante l'epurazione: il mondo resta nascosto, il job è riprendibile  |
+
+`GET /api/worlds/:id/deletion` legge lo stato dell'ultimo job; `POST /api/worlds/:id/deletion` prosegue un
+job già confermato (idempotente, sicuro in concorrenza grazie al lease). Il cron opzionale riprende i job
+abbandonati (scheda chiusa a metà). La UI mostra la percentuale e riprende da sola i mondi "in eliminazione".
+
+**Semantica delle transazioni.** La conferma (tombstone) è atomica: se fallisce non cambia nulla. L'epurazione
+è monotona e riprendibile: un blocco che fallisce viene annullato per intero (nessuna riga persa a metà), il
+mondo resta nascosto, e la ripresa completa il lavoro. Nessuna riga di un altro mondo può essere toccata:
+ogni istruzione è filtrata per `world_id` e gli id interni vivono in chiavi `(world_id, id)`.
+
+**Grafo delle dipendenze** (verificato su `schema.ts`, migrazioni e `pg_constraint`): `world_cells`, `tribes`,
+`households`, `people`, `settlements`, `civilizations`, `world_technologies`, `relationships`,
+`historical_events`, `world_stats`, `world_snapshots`, `dynasties`, `civilization_stats`, `simulation_runs`,
+`vassal_relationships`, `occupations`, `composite_identities`, `simulation_locks` — tutte `world_id →
+worlds.id ON DELETE CASCADE`, indicizzate. `technologies` è il catalogo globale: **mai toccato**.
+`world_deletion_jobs` non ha FK di proposito: il record dell'eliminazione sopravvive al mondo.
+
+**Diagnosi senza rischi**:
+
+```bash
+npm run diagnose:world-delete -- --world-id <uuid>        # oppure --json
+```
+
+Esegue solo letture dentro una transazione `READ ONLY`: righe e dimensioni per tabella, foreign key
+(`ON DELETE`, indice sulla colonna figlia), trigger, timeout della sessione, **sessioni sospette** (idle in
+transaction, in attesa di lock, con lock sulle tabelle dei mondi, con `pg_blocking_pids`), piano `EXPLAIN` di
+un blocco, stima dei tempi e piano consigliato. Suggerisce `pg_terminate_backend(<pid>)` per una sessione
+orfana confermata, ma non lo esegue mai. Non usarlo per "provare" un'eliminazione su un mondo di produzione.
+
+**Test** (`npm run test:world-delete`):
+
+- `tests/world-deletion.test.ts` (PGlite in memoria): audit dello schema (ogni tabella con `world_id`
+  registrata, ogni FK `CASCADE` e indicizzata, nessun trigger), id non valido, conferma o nome errati,
+  mondo inesistente, utente non autorizzato, mondo in esecuzione, simulazione in corso, mondo piccolo, mondo con
+  dati in **ogni** tabella figlia, mondo legacy, nessuna query per record (conteggio delle `DELETE`
+  eseguite), idempotenza, richieste concorrenti (un solo job), tombstone invisibile a letture e scritture,
+  batch di simulazione concorrente scartato, budget esaurito (202 e ripresa fino al completamento con
+  progresso monotono e contabilità esatta), lease di una Function morta, rollback di un blocco e del passo
+  finale con guasti iniettati, errore transitorio (SQLSTATE 55P03 → 202 riprendibile), endpoint che risponde
+  sempre (guasto inatteso → 500 con `requestId`), lock e lease rilasciati, nessuna transazione lasciata aperta.
+- `tests/world-deletion.pg.test.ts` (**Postgres reale**, solo con `TEST_DATABASE_URL` che punta a un
+  database usa-e-getta il cui nome contiene "test"): la transazione orfana che causava il 504 ora produce 409
+  `WORLD_BUSY` in pochi secondi, lo stesso per il lock di simulazione, `idle_in_transaction_session_timeout`
+  chiude la sessione orfana e l'eliminazione procede, richieste concorrenti su più connessioni, mondo 96×96
+  dopo 300 anni eliminato ben dentro il budget.
 
 ### Sicurezza
 
@@ -1006,30 +1248,78 @@ Il progetto gestisce bene circa 1.000–1.500 individui attivi. Evoluzioni previ
   un container o una Vercel Queue) alimentato da una coda. Next.js resta per UI e API; il lock passa a Redis.
 - **Scrittura incrementale**: tracciare le entità modificate (dirty set) invece di riscrivere tutte le persone vive.
 
-## Limiti noti e trade-off
+## Limiti attuali
+
+Stato reale delle funzionalità (implementato · parziale · previsto):
+
+1. **Identità dell'età moderna** — _implementate_: 10 identità (Francesi, Inglesi, Spagnoli, Portoghesi,
+   Ottomani, Italiani, Tedeschi, Russi, Etiopi, Statunitensi) come sandbox culturali. Mancano altre identità
+   moderne e la categoria `regional` è vuota.
+2. **Fusioni in identità composite** — _implementate nel motore e testate, ma rare_: con la taratura attuale
+   della diplomazia le precondizioni (alleanza con fiducia alta, o vassallaggio lungo e pacificato) non si
+   verificano nelle simulazioni standard (0 fusioni in 20 seed × 250 tick). Le soglie non sono state
+   abbassate artificialmente.
+3. **Vassallaggi e occupazioni** — _implementati come stati espliciti_ (creazione, tributo, autonomia, leva,
+   ribellione, indipendenza; occupazione con costi, prelievi, controllo, resistenza, annessione, liberazione,
+   autonomia, restituzione). _Parziali_: il vassallo non può essere annesso pacificamente, la leva è astratta
+   (nessun movimento di eserciti), la mappa non distingue ancora graficamente vassalli e occupanti.
+4. **Linguaggio** — _migliorato_: nessun «la tribù Egizi», articoli, preposizioni, accordo di verbi e
+   participi, forme politiche e leader gestiti da template controllati; un test controlla i testi reali del
+   motore. _Limiti_: i template restano in italiano soltanto e alcune frasi restano formulaiche; gli eventi già
+   salvati nei mondi esistenti mantengono il testo originale.
+5. **Mappe piccole** — la fascia di qualità si allarga (dichiarata, registrata e segnalata in UI): le partenze
+   possono essere meno omogenee che sulle mappe grandi.
+6. **Catalogo parziale**: 30 identità, prevalentemente eurasiatiche; Oceania e molte regioni non sono coperte.
+7. Le identità reali sono **ispirazione culturale e visiva**, non una ricostruzione della storia reale.
+8. I **leader sono procedurali**: mai personaggi storici (i nomi riservati non vengono generati).
+9. Le **identità composite** sono generate dal motore e non vanno presentate come civiltà storiche reali.
+10. **Scalabilità**: oltre ~1.500 individui attivi le prestazioni degradano; va verificata con stress test
+    dedicati a popolazioni maggiori.
+11. **Eliminazione di mondi molto grandi**: avviene a job con blocchi e ripresa (202). Se il browser si chiude
+    a metà, il mondo resta nascosto e il job viene ripreso riaprendo l'elenco o dal cron opzionale; senza né
+    l'uno né l'altro i dati restano in attesa di ripresa.
+12. **Causa del 504**: individuata e riprodotta localmente su Postgres reale (transazioni orfane senza
+    `lock_timeout`), ma **non confermata sui log di produzione**, che non erano accessibili. I nuovi log
+    strutturati e `npm run diagnose:world-delete` servono a confermarla.
+13. La **diplomazia** non forma quasi mai alleanze (soglia di fiducia 0,7 irraggiungibile in pratica) e il
+    tributo mantiene alta l'ostilità nei vassallaggi: è il motivo per cui le fusioni sono rare.
+
+Trade-off noti che restano validi:
 
 - Il bilanciamento è empirico: alcuni seed producono molte bande in lotta, altri poche civiltà stabili. I
-  parametri fissi sono in `constants.ts`, quelli regolabili in `config.ts` (e salvati sul mondo).
-- Le popolazioni oscillano con cicli di crescita e crisi (sovrappopolazione → carestia → ripresa): è un esito
-  voluto del modello malthusiano, non un difetto, ma rende i numeri assoluti poco stabili fra un secolo e l'altro.
-- La stagionalità è calcolata per anno, non per giorno: le quattro stagioni pesano sulla produzione e sui consumi,
-  ma non esiste uno stato del mondo "a metà anno".
-- Molte decisioni sono prese a livello di comunità (migrazione, costruzioni, diplomazia): gli individui scelgono
-  azioni e ruoli, ma non si muovono singolarmente sulla mappa.
+  parametri fissi sono in `constants.ts`, `politics.ts` (`POLITICS`), `fusion.ts` (`FUSION`), `placement.ts`
+  (`PLACEMENT_BANDS`); quelli regolabili in `config.ts` (e salvati sul mondo).
+- Le popolazioni oscillano con cicli di crescita e crisi: esito voluto del modello malthusiano.
+- La stagionalità è calcolata per anno; molte decisioni sono prese a livello di comunità.
 - Ogni batch riscrive tutte le persone vive (upsert a blocchi): semplice e corretto, ma cresce con la popolazione.
-- La grammatica dei template è semplificata: gli articoli davanti ai nomi dei popoli vengono corretti
-  ("gli Egizi", "degli Inca"), ma frasi come "la tribù Egizi" restano meccaniche.
-- Il catalogo copre 20 identità soprattutto antiche e medievali; le categorie `early_modern` e `modern` sono
-  previste dallo schema ma ancora vuote. La fusione di due popoli in un'identità `composite` è prevista dal
-  tipo ma non ancora prodotta dal motore (oggi un popolo assorbito resta in `absorbed_identity_ids`).
-- Il posizionamento bilanciato riduce le differenze di partenza, non le annulla: sulle mappe piccole la
-  fascia di qualità si allarga.
-- Gli snapshot sono JSON non compressi (qualche centinaio di KB ciascuno): se ne conservano pochi.
+- Gli snapshot sono JSON non compressi: se ne conservano pochi.
 - Nessuna autenticazione: `owner_id` è predisposto ma non usato, e con esso l'RLS.
 - La guerra è un sistema strategico aggregato: non esiste una mappa tattica né il movimento degli eserciti.
-- Le persone comuni restano individui completi: l'interfaccia di aggregazione è prevista ma non implementata,
-  quindi oltre ~1.500 individui attivi le prestazioni degradano.
 - Test end-to-end Playwright non inclusi (lo scenario è coperto dai test d'integrazione su API e DB).
+
+## Prossima milestone
+
+In ordine di priorità (il database è stato reso affidabile prima di estendere le funzionalità):
+
+1. **Catalogo**: estendere le identità reali (Oceania, Africa subsahariana, Asia centrale e sudorientale,
+   Americhe) e popolare la categoria `regional`.
+2. **Età moderna**: altre identità moderne selezionabili, sempre con partenza uniforme e senza modificatori.
+3. **Fusioni realmente frequenti**: ritarare la diplomazia (formazione delle alleanze, effetto del tributo
+   sull'ostilità) in modo che le precondizioni delle fusioni emergano in partite lunghe, misurandolo con la
+   matrice di stress; aggiungere l'annessione pacifica di vassalli integrati.
+4. **Vassallaggi e occupazioni**: leva visibile, obblighi negoziati, occupazioni di territorio senza
+   insediamento, coalizioni di liberazione.
+5. **Lingua**: distinguere sistematicamente popolo, civiltà, regno, impero, confederazione e stato; template
+   per le composite di composite; eventuale localizzazione.
+6. **Mappe piccole**: mantenere la fascia allargata ma documentata, con metriche di equità per partita e
+   possibili mappe "consigliate" per numero di civiltà.
+7. **Mappa**: disegnare emblemi delle civiltà, simboli delle dinastie, stili architettonici coerenti con
+   l'identità, indicatori per le composite e differenze visive fra vassalli, occupanti e stati indipendenti.
+8. **Legenda e tooltip** per distinguere identità storica, civiltà procedurale, identità composita, stato
+   occupato, vassallo e successore.
+9. **Font e template** degli eventi: tipografia della cronologia e varianti dei template.
+10. **Profiling del database e della cancellazione** in produzione: confermare la causa del 504 sui log,
+    misurare i job su mondi reali, eventualmente spostare la ripresa su una coda (Vercel Queues/Workflow).
 
 ## Roadmap tecnica
 
@@ -1044,8 +1334,6 @@ Il progetto gestisce bene circa 1.000–1.500 individui attivi. Evoluzioni previ
 6. Autenticazione (Supabase Auth) e `owner_id` sui mondi, con policy RLS e test dedicati.
 7. Tracciamento delle entità modificate per salvataggi incrementali; compressione degli snapshot.
 8. Smoke test Playwright (crea mondo → +10 anni → verifica timeline).
-9. **Identità**: estendere il catalogo (età moderna, altri popoli), fusioni in identità `composite`,
-   vassallaggi e occupazioni come stati politici espliciti, rendering degli emblemi e degli stili
-   architettonici sulla mappa.
+9. **Identità**: vedi [Prossima milestone](#prossima-milestone).
 10. **IA narrativa opzionale e locale**: un livello puramente descrittivo sopra gli eventi già persistiti, non
     deterministico e sempre disattivabile, che non partecipa mai alle decisioni degli agenti.

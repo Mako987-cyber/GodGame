@@ -2,6 +2,8 @@ import { GOVERNMENTS } from "./constants";
 import type { SimContext } from "./context";
 import { actor, emitEvent } from "./events";
 import { clamp, round } from "./grid";
+import { agree } from "./language/italian";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import type { Rng } from "./prng";
 import { tribeEffects } from "./technology";
 import type { CultureTraits, GovernmentType, Stability, Tribe } from "./types";
@@ -283,8 +285,17 @@ export function updateGovernment(
         actors: [actor.tribe(tribe)],
         x: tribe.x,
         y: tribe.y,
-        title: `I ${tribe.name} tornano a un'organizzazione più semplice`,
-        description: `Ridotti a ${population} persone, i ${tribe.name} non riescono più a sostenere le vecchie istituzioni: il potere torna alle forme più antiche.`,
+        title: t("{Art:people} {v:people:torna|tornano} a un'organizzazione più semplice", {
+          people: peoplePhrase(tribe),
+        }),
+        description: t(
+          "{reduced} a {population} persone, {art:people} non {v:people:riesce|riescono} più a sostenere le vecchie istituzioni: il potere torna alle forme più antiche.",
+          {
+            reduced: agree(peoplePhrase(tribe), "Ridotto", "Ridotta", "Ridotti", "Ridotte"),
+            population,
+            people: peoplePhrase(tribe),
+          },
+        ),
         metadata: { from: previous, to: next, population },
       });
     }
@@ -304,8 +315,11 @@ export function updateGovernment(
       actors: [actor.tribe(tribe)],
       x: tribe.x,
       y: tribe.y,
-      title: `Nuova forma di governo tra i ${tribe.name}`,
-      description: `Con ${population} abitanti e ${settlements} insediamenti, i ${tribe.name} hanno cambiato il modo di governarsi: ${step.reason}.`,
+      title: t("Nuova forma di governo presso {art:people}", { people: peoplePhrase(tribe) }),
+      description: t(
+        "Con {population} abitanti e {settlements} insediamenti, {art:people} {v:people:ha|hanno} cambiato il modo di governarsi: {reason}.",
+        { population, settlements, people: peoplePhrase(tribe), reason: step.reason },
+      ),
       metadata: { from: previous, to: step.to, population, settlements, maxLevel },
     });
     return;

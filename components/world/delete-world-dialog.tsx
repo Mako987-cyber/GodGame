@@ -20,7 +20,7 @@ export interface DeletableWorld {
   id: string;
   name: string;
   seed: string;
-  status: "running" | "paused";
+  status: "running" | "paused" | "deleting";
 }
 
 /**
@@ -44,6 +44,7 @@ export function DeleteWorldDialog({
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
   const inFlight = useRef(false);
   const inputId = useId();
   const phrase = deleteConfirmationPhrase(world.name);
@@ -62,7 +63,9 @@ export function DeleteWorldDialog({
     setBusy(true);
     setError(null);
     try {
-      await deleteWorldFlow(queryClient, world, typed);
+      await deleteWorldFlow(queryClient, world, typed, undefined, {
+        onProgress: (state) => setProgress(state.progress ?? null),
+      });
       setTyped("");
       if (onDeleted) onDeleted();
       else {
@@ -74,6 +77,7 @@ export function DeleteWorldDialog({
     } finally {
       inFlight.current = false;
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -98,7 +102,11 @@ export function DeleteWorldDialog({
             onClick={submit}
           >
             {busy ? <Loader2 className="animate-spin" aria-hidden /> : <Trash2 aria-hidden />}
-            {busy ? "Eliminazione in corso…" : "Elimina definitivamente"}
+            {busy
+              ? progress !== null
+                ? `Eliminazione in corso… ${Math.round(progress * 100)}%`
+                : "Eliminazione in corso…"
+              : "Elimina definitivamente"}
           </Button>
         </>
       }

@@ -1,11 +1,12 @@
 import { createPerson } from "./agents";
-import { namingFor } from "./identity/catalog";
+import { identityOf } from "./identity/composite";
 import { winterMortalityFactor } from "./climate";
 import { AGE, MORTALITY } from "./constants";
 import type { Community, SimContext } from "./context";
 import { nextId } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
 import { cellAt, clamp, round } from "./grid";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { educate, ensureLeader, inherit } from "./leadership";
 import type { TechEffects } from "./technology";
 import type { DeathCause, Household, Person, Tribe } from "./types";
@@ -84,8 +85,15 @@ export function killPerson(ctx: SimContext, person: Person, cause: DeathCause) {
       actors: [actor.person(person), actor.tribe(tribe)],
       x: person.x,
       y: person.y,
-      title: `Muore ${person.name}, guida dei ${tribe.name}`,
-      description: `${person.name}, guida della tribù ${tribe.name}, è morto ${causeText[cause]} a ${person.age} anni presso ${describePlace(ctx.state, person.x, person.y)}.`,
+      title: t("Muore {name}, guida {di:people}", { name: person.name, people: peoplePhrase(tribe) }),
+      description: t("{name}, guida {di:people}, è {died} {cause} a {age} anni presso {place}.", {
+        name: person.name,
+        people: peoplePhrase(tribe),
+        died: person.sex === "F" ? "morta" : "morto",
+        cause: causeText[cause],
+        age: person.age,
+        place: describePlace(ctx.state, person.x, person.y),
+      }),
       metadata: {
         personId: person.id,
         cause,
@@ -104,7 +112,13 @@ export function killPerson(ctx: SimContext, person: Person, cause: DeathCause) {
       x: person.x,
       y: person.y,
       title: `Muore ${person.name}`,
-      description: `${person.name}, figura di rilievo tra i ${tribe.name}, è morto ${causeText[cause]} a ${person.age} anni.`,
+      description: t("{name}, figura di rilievo {di:people}, è {died} {cause} a {age} anni.", {
+        name: person.name,
+        people: peoplePhrase(tribe),
+        died: person.sex === "F" ? "morta" : "morto",
+        cause: causeText[cause],
+        age: person.age,
+      }),
       metadata: {
         personId: person.id,
         cause,
@@ -309,7 +323,7 @@ export function births(
       mother,
       father,
       householdId: mother.householdId,
-      naming: namingFor(community.tribe),
+      naming: identityOf(ctx.state, community.tribe.identityId)?.namingProfile ?? null,
       nameSeed: `${ctx.state.seed}:${id}`,
     });
     child.birthSettlementId = mother.settlementId;
@@ -332,8 +346,19 @@ export function births(
         actors: [actor.person(child), actor.tribe(community.tribe)],
         x: mother.x,
         y: mother.y,
-        title: `Nasce ${child.name}, figlio della guida dei ${community.tribe.name}`,
-        description: `Nella tribù ${community.tribe.name} è nato ${child.name}, figlio di ${father.name} e ${mother.name}.`,
+        title: t("Nasce {name}, {child} della guida {di:people}", {
+          name: child.name,
+          child: child.sex === "F" ? "figlia" : "figlio",
+          people: peoplePhrase(community.tribe),
+        }),
+        description: t("Presso {art:people} è {born} {name}, {child} di {father} e {mother}.", {
+          people: peoplePhrase(community.tribe),
+          born: child.sex === "F" ? "nata" : "nato",
+          name: child.name,
+          child: child.sex === "F" ? "figlia" : "figlio",
+          father: father.name,
+          mother: mother.name,
+        }),
         metadata: { personId: child.id, motherId: mother.id, fatherId: father.id },
       });
     }
@@ -353,8 +378,15 @@ export function checkPopulationMilestone(ctx: SimContext, tribe: Tribe, populati
     actors: [actor.tribe(tribe)],
     x: tribe.x,
     y: tribe.y,
-    title: `I ${tribe.name} superano i ${next} abitanti`,
-    description: `La popolazione della tribù ${tribe.name} ha superato le ${next} persone (${population} oggi).`,
+    title: t("{Art:people} {v:people:supera|superano} i {next} abitanti", {
+      people: peoplePhrase(tribe),
+      next,
+    }),
+    description: t("La popolazione {di:people} ha superato le {next} persone ({population} oggi).", {
+      people: peoplePhrase(tribe),
+      next,
+      population,
+    }),
     metadata: { population, milestone: next },
   });
 }

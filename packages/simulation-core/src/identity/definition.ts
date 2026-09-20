@@ -16,7 +16,53 @@ import { z } from "zod";
  */
 
 /** Bumped whenever an identity is added or its metadata changes. */
-export const IDENTITY_CATALOG_VERSION = "2026.09-1";
+export const IDENTITY_CATALOG_VERSION = "2026.09-2";
+
+/**
+ * The start every identity declares — and the only one it may declare. It is not a property of
+ * the people but of the game: prehistoric Egizi and "modern" Italiani alike begin as a band
+ * with stone tools, a camp and a clan. The schema below only accepts exactly these values.
+ */
+export const UNIFORM_START = {
+  defaultGovernment: "clan",
+  startingTechnologies: ["stone_tools"],
+  startingInfrastructure: ["camp"],
+  /** Band size range of `DEFAULT_SETTINGS` (minTribeSize..maxTribeSize). */
+  startingPopulationRange: [15, 40],
+} as const;
+
+export const uniformStartSchema = z.object({
+  defaultGovernment: z.literal(UNIFORM_START.defaultGovernment),
+  startingTechnologies: z.tuple([z.literal("stone_tools")]),
+  startingInfrastructure: z.tuple([z.literal("camp")]),
+  startingPopulationRange: z.tuple([z.literal(15), z.literal(40)]),
+});
+export type UniformStart = z.infer<typeof uniformStartSchema>;
+
+/**
+ * Grammar of an identity in Italian, so generated sentences read "gli Egizi hanno fondato…" and
+ * "il Regno Egizio…", never "la tribù Egizi". Patterns use `{tokens}`:
+ * - political names: `{form}` (Regno, Lega… from the government), `{capital}`, `{adjective}`
+ *   (agreed with the form: "Regno Egizio", "Lega Egizia");
+ * - leader phrases: `{title}`, `{name}`;
+ * - settlement names: `{stem}` (derived from the naming profile's prefixes/suffixes).
+ */
+export const identityLanguageProfileSchema = z.object({
+  /** One member of the people, capitalised as a proper noun: "Egizio". */
+  singularNoun: z.string().min(2).max(40),
+  /** The people: equal to `displayName` ("Egizi"). */
+  pluralNoun: z.string().min(2).max(40),
+  /** Masculine / feminine singular adjective, lower case: "egizio" / "egizia". */
+  adjective: z.string().min(2).max(40),
+  adjectiveFeminine: z.string().min(2).max(40),
+  /** Plural noun with its article: "gli Egizi", "i Romani". */
+  collectiveName: z.string().min(3).max(45),
+  articleGender: z.enum(["masculine", "feminine", "neutral"]),
+  politicalNamePatterns: z.array(z.string().includes("{form}")).min(1).max(6),
+  leaderTitlePatterns: z.array(z.string().includes("{name}")).min(1).max(4),
+  settlementNamePatterns: z.array(z.string().includes("{stem}")).min(1).max(8),
+});
+export type IdentityLanguageProfile = z.infer<typeof identityLanguageProfileSchema>;
 
 /**
  * Largest absolute culture offset (on the 0..100 trait scale) one identity modifier may apply.
@@ -181,6 +227,8 @@ export const historicalIdentitySchema = z
     representationNotes: z.string().min(20).max(400),
     sources: z.array(historicalSourceSchema).min(1),
     dataVersion: z.string().min(1),
+    language: identityLanguageProfileSchema,
+    uniformStart: uniformStartSchema,
   })
   .superRefine((identity, ctx) => {
     const mods = identity.behavioralModifiers;
@@ -194,6 +242,19 @@ export const historicalIdentitySchema = z
       ctx.addIssue({ code: "custom", message: "tratto modificato due volte" });
     if (identity.visualProfile.primaryColor === identity.visualProfile.secondaryColor)
       ctx.addIssue({ code: "custom", message: "colori primario e secondario identici" });
+    if (identity.language.pluralNoun !== identity.displayName)
+      ctx.addIssue({
+        code: "custom",
+        message: "il plurale del profilo linguistico deve essere il nome del popolo",
+      });
+    if (
+      !identity.language.collectiveName.endsWith(` ${identity.displayName}`) &&
+      !identity.language.collectiveName.endsWith(`'${identity.displayName}`)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "il nome collettivo deve essere «articolo + nome del popolo»",
+      });
   });
 
 export type HistoricalIdentityDefinition = z.infer<typeof historicalIdentitySchema>;

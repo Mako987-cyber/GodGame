@@ -30,6 +30,9 @@ export function checkIdentityLineage(state: WorldState): string[] {
       continue;
     }
     if (founders.get(tribe.id) === tribe.identityId) continue;
+    // A people born from a fusion carries the composite identity created for it.
+    const composite = state.composites?.find((c) => c.id === tribe.identityId);
+    if (composite && composite.civilizationId === tribe.id && tribe.identityType === "composite") continue;
     const parent = tribe.parentTribeId ? tribes.get(tribe.parentTribeId) : undefined;
     if (!parent || parent.identityId !== tribe.identityId || parent.seq >= tribe.seq)
       problems.push(

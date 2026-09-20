@@ -4,7 +4,9 @@ import { emptyStock, nextId } from "./context";
 import { initialStability } from "./culture";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { cellsInRadius, distance } from "./grid";
-import { getIdentity, identityPlaceName, recordAbsorbedIdentity, successorName } from "./identity";
+import { identityPlaceName, recordAbsorbedIdentity, successorName } from "./identity";
+import { identityOf } from "./identity/composite";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { tribeName } from "./names";
 import { areaQuality, workArea } from "./resources";
 import { grantTech } from "./technology";
@@ -100,8 +102,14 @@ export function migrateBand(ctx: SimContext, community: Community, hostileNearby
       actors: [actor.tribe(tribe)],
       x: best.x,
       y: best.y,
-      title: `I ${tribe.name} migrano`,
-      description: `La tribù ${tribe.name} ha lasciato ${fromPlace}. ${why}, ${pluralPeople(community.members.length)} hanno raggiunto ${describePlace(ctx.state, best.x, best.y)}.`,
+      title: t("{Art:people} {v:people:migra|migrano}", { people: peoplePhrase(tribe) }),
+      description: t("{Art:people} {v:people:ha|hanno} lasciato {from}. {why}, {n} hanno raggiunto {to}.", {
+        people: peoplePhrase(tribe),
+        from: fromPlace,
+        why,
+        n: pluralPeople(community.members.length),
+        to: describePlace(ctx.state, best.x, best.y),
+      }),
       metadata: {
         from: [from.x, from.y],
         to: [best.x, best.y],
@@ -141,6 +149,7 @@ function newRelationship(a: Tribe, b: Tribe, year: number, trust: number): Relat
     phase: "peace",
     lastConflictYear: null,
     phaseYears: 0,
+    fusionYears: 0,
   };
 }
 
@@ -150,7 +159,7 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
   const parent = community.tribe;
   const { id, seq } = nextId(ctx.state, "tribe", "t");
   const used = new Set(ctx.state.tribes.map((t) => t.name));
-  const identity = getIdentity(parent.identityId);
+  const identity = identityOf(ctx.state, parent.identityId);
   let name: string;
   if (identity) {
     // The band that leaves is still the same people: it is named after a new home of its own.
@@ -206,6 +215,9 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     if (!moving.has(p.id)) continue;
     p.tribeId = child.id;
   }
+  // The leavers are no longer part of the parent's band this year: if the band founds a
+  // settlement later in the same tick, they must not be counted (or housed) as its members.
+  community.members = community.members.filter((p) => !moving.has(p.id));
   for (const h of ctx.state.households) {
     const partner = ctx.people.get(h.partnerIds[0]);
     if (partner && moving.has(partner.id)) h.tribeId = child.id;
@@ -219,8 +231,11 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     actors: [actor.tribe(child), actor.tribe(parent)],
     x: parent.x,
     y: parent.y,
-    title: `Nasce la tribù ${child.name}`,
-    description: `La tribù ${parent.name} era diventata troppo numerosa: ${pluralPeople(moving.size)} si sono separate formando la tribù ${child.name}.`,
+    title: t("{v:child:Nasce|Nascono} {art:child}", { child: peoplePhrase(child) }),
+    description: t(
+      "{Art:parent} {v:parent:era diventata troppo numerosa|erano diventati troppo numerosi}: {n} si sono separate formando {art:child}.",
+      { parent: peoplePhrase(parent), child: peoplePhrase(child), n: pluralPeople(moving.size) },
+    ),
     metadata: { parentTribeId: parent.id, population: moving.size, identityId: parent.identityId },
   });
   return child;
@@ -270,8 +285,16 @@ export function joinNearbyGroup(
     actors: [actor.tribe(tribe), actor.tribe(host.tribe)],
     x: host.x,
     y: host.y,
-    title: `I ${tribe.name} si uniscono ai ${host.tribe.name}`,
-    description: `Ridotti a ${pluralPeople(members.length)}, gli ultimi ${tribe.name} si sono uniti alla tribù ${host.tribe.name}${host.settlement ? ` presso ${host.settlement.name}` : ""}.`,
+    title: t("{Art:people} si {v:people:unisce|uniscono} {a:host}", {
+      people: peoplePhrase(tribe),
+      host: peoplePhrase(host.tribe),
+    }),
+    description: t("Ridotti a {n}, gli ultimi membri {di:people} si sono uniti {a:host}{where}.", {
+      n: pluralPeople(members.length),
+      people: peoplePhrase(tribe),
+      host: peoplePhrase(host.tribe),
+      where: host.settlement ? ` presso ${host.settlement.name}` : "",
+    }),
     metadata: {
       absorbedTribeId: tribe.id,
       hostTribeId: host.tribe.id,

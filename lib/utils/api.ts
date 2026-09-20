@@ -9,12 +9,18 @@ export function ok<T>(data: T, init?: ResponseInit) {
   return NextResponse.json({ data }, init);
 }
 
-export function errorResponse(error: unknown) {
+/** Vercel's request id when deployed, a fresh one otherwise: echoed in errors and logs. */
+export function requestIdOf(request: Request): string {
+  return request.headers.get("x-vercel-id") ?? request.headers.get("x-request-id") ?? crypto.randomUUID();
+}
+
+export function errorResponse(error: unknown, requestId?: string) {
+  const headers = requestId ? { "x-request-id": requestId } : undefined;
   if (error instanceof AppError) {
     const body: ApiErrorBody = {
-      error: { code: error.code, message: error.message, details: error.details },
+      error: { code: error.code, message: error.message, details: error.details, requestId },
     };
-    return NextResponse.json(body, { status: error.status });
+    return NextResponse.json(body, { status: error.status, headers });
   }
   if (error instanceof ZodError) {
     const body: ApiErrorBody = {
@@ -22,13 +28,14 @@ export function errorResponse(error: unknown) {
         code: "INVALID_INPUT",
         message: error.issues[0]?.message ?? "Input non valido",
         details: error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        requestId,
       },
     };
-    return NextResponse.json(body, { status: 400 });
+    return NextResponse.json(body, { status: 400, headers });
   }
-  logger.error("api.unhandled", errorDetails(error));
-  const body: ApiErrorBody = { error: { code: "INTERNAL", message: "Errore interno del server" } };
-  return NextResponse.json(body, { status: 500 });
+  logger.error("api.unhandled", { requestId, ...errorDetails(error) });
+  const body: ApiErrorBody = { error: { code: "INTERNAL", message: "Errore interno del server", requestId } };
+  return NextResponse.json(body, { status: 500, headers });
 }
 
 export async function readJson(request: Request): Promise<unknown> {

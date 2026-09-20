@@ -2,11 +2,12 @@ import { AGE } from "./constants";
 import type { Community, SimContext } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
 import { cellAt, clamp, round } from "./grid";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { killPerson } from "./population";
 import type { Rng } from "./prng";
 import { addResource, consumeResource, getResourceAmount, RESOURCES } from "./stock";
-import { recordAbsorbedIdentity } from "./identity/lineage";
-import { grantTech, tribeEffects } from "./technology";
+import { onBattleResolved, startOccupation, vassalLevy } from "./politics";
+import { tribeEffects } from "./technology";
 import type { Person, Relationship, Tribe } from "./types";
 
 export interface CombatSide {
@@ -152,11 +153,18 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
   if (siege) dSide.defense *= 1 + walls * 0.4;
   dSide.warriors = Math.round(dSide.warriors * (1 + input.allyBonus));
   if (aSide.warriors === 0) return;
+  // Vassals within reach send their levy (politics.ts); casualties fall on each side's own people.
+  const aOwn = aSide.warriors;
+  const dOwn = dSide.warriors;
+  const aLevy = kind === "battle" ? vassalLevy(ctx, attacker, target) : 0;
+  const dLevy = kind === "battle" ? vassalLevy(ctx, defender, target) : 0;
+  aSide.warriors += aLevy;
+  dSide.warriors += dLevy;
   const outcome = resolveBattle(aSide, dSide, ctx.rng);
   const scale = kind === "raid" ? 0.5 : 1;
   const attackerMembers = input.attackerCommunities.flatMap((c) => c.members);
-  const aLosses = applyCasualties(ctx, attackerMembers, outcome.attackerLossRate * scale, aSide.warriors);
-  const dLosses = applyCasualties(ctx, target.members, outcome.defenderLossRate * scale, dSide.warriors);
+  const aLosses = applyCasualties(ctx, attackerMembers, outcome.attackerLossRate * scale, aOwn);
+  const dLosses = applyCasualties(ctx, target.members, outcome.defenderLossRate * scale, dOwn);
   ctx.counters.battles++;
   relationship.battles++;
   relationship.conflictMemory = clamp(relationship.conflictMemory + 0.3);
@@ -211,14 +219,20 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
   const where = target.settlement ? target.settlement.name : place;
   const title =
     kind === "raid"
-      ? `Incursione dei ${attacker.name} contro i ${defender.name}`
+      ? t("Incursione {di:att} contro {art:def}", {
+          att: peoplePhrase(attacker),
+          def: peoplePhrase(defender),
+        })
       : target.settlement
         ? `Battaglia di ${target.settlement.name}`
         : `Battaglia presso ${place}`;
   const result = outcome.attackerWins
-    ? `I ${attacker.name} hanno avuto la meglio${loot > 0 ? `, saccheggiando ${Math.round(loot)} unità di cibo` : ""}`
-    : `I ${defender.name} hanno respinto l'attacco`;
-  emitEvent(ctx, {
+    ? t("{Art:att} {v:att:ha|hanno} avuto la meglio{loot}", {
+        att: peoplePhrase(attacker),
+        loot: loot > 0 ? `, saccheggiando ${Math.round(loot)} unità di cibo` : "",
+      })
+    : t("{Art:def} {v:def:ha|hanno} respinto l'attacco", { def: peoplePhrase(defender) });
+  const battle = emitEvent(ctx, {
     type: "battle",
     subtype: siege ? "siege" : kind,
     importance: kind === "raid" ? 2 : 3,
@@ -230,7 +244,20 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
     x: target.x,
     y: target.y,
     title,
-    description: `${kind === "raid" ? "Incursione" : "Scontro"} presso ${where}: ${aSide.warriors} guerrieri ${attacker.name} contro ${dSide.warriors} ${defender.name}. ${result}. Caduti: ${aLosses} attaccanti, ${dLosses} difensori.`,
+    description: t(
+      "{kind} presso {where}: {aw} guerrieri {di:att} contro {dw} {di:def}. {result}. Caduti: {al} attaccanti, {dl} difensori.",
+      {
+        kind: kind === "raid" ? "Incursione" : "Scontro",
+        where,
+        aw: aSide.warriors,
+        att: peoplePhrase(attacker),
+        dw: dSide.warriors,
+        def: peoplePhrase(defender),
+        result,
+        al: aLosses,
+        dl: dLosses,
+      },
+    ),
     metadata: {
       kind,
       siege,
@@ -243,6 +270,8 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
       defenderPower: round(outcome.defenderPower, 1),
       attackerWarriors: aSide.warriors,
       defenderWarriors: dSide.warriors,
+      attackerLevy: aLevy,
+      defenderLevy: dLevy,
       defense: round(dSide.defense, 2),
       logistics: aSide.logistics ?? 1,
       marchDistance,
@@ -253,64 +282,13 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
     },
   });
 
+  onBattleResolved(ctx, winner, loser);
   if (kind === "battle" && outcome.attackerWins && target.settlement && outcome.margin >= 1.6) {
     const remaining = fighters(target.members).length;
-    // Walls buy the defenders one more chance before the settlement falls.
+    // Walls buy the defenders one more chance before the settlement falls. A fallen
+    // settlement is occupied, not annexed (politics.ts): annexation may come years later.
     const threshold = walls > 0 ? 0.35 : 0.6;
-    if (remaining < aSide.warriors * threshold) occupySettlement(ctx, attacker, defender, target);
+    if (remaining < aSide.warriors * threshold)
+      startOccupation(ctx, attacker, defender, target.settlement, battle.id || null);
   }
-}
-
-function occupySettlement(ctx: SimContext, attacker: Tribe, defender: Tribe, target: Community) {
-  const s = target.settlement;
-  if (!s) return;
-  s.tribeId = attacker.id;
-  s.civilizationId = attacker.civilizationId;
-  s.construction = null;
-  const survivors = target.members.filter((p) => p.alive);
-  const carried = new Set(survivors.flatMap((p) => p.knowledge));
-  for (const p of survivors) p.tribeId = attacker.id;
-  for (const h of ctx.state.households) {
-    const partner = ctx.people.get(h.partnerIds[0]);
-    if (partner && partner.settlementId === s.id) h.tribeId = attacker.id;
-  }
-  if (defender.leaderId && survivors.some((p) => p.id === defender.leaderId)) defender.leaderId = null;
-  const remainingOwn = ctx.state.settlements.filter(
-    (o) => o.status === "active" && o.tribeId === defender.id,
-  );
-  if (remainingOwn.length === 0 && defender.status === "settled") {
-    defender.status = "nomadic";
-  }
-  target.tribe = attacker;
-  // The land around the settlement changes hands with it.
-  for (const cell of ctx.state.cells) {
-    if (cell.settlementId === s.id) cell.ownerTribeId = attacker.id;
-  }
-  // Survivors bring their identity with them: it lives on under the conqueror.
-  recordAbsorbedIdentity(attacker, defender);
-  attacker.stability.legitimacy = clamp(attacker.stability.legitimacy + 0.08);
-  defender.stability.legitimacy = clamp(defender.stability.legitimacy - 0.15);
-  defender.stability.tension = clamp(defender.stability.tension + 0.15);
-  s.unrest = clamp(s.unrest + 0.35);
-  emitEvent(ctx, {
-    type: "conquest",
-    subtype: "settlement",
-    importance: 5,
-    actors: [actor.tribe(attacker), actor.tribe(defender), actor.settlement(s)],
-    x: s.x,
-    y: s.y,
-    title: `${s.name} conquistata dai ${attacker.name}`,
-    description: `Dopo la sconfitta, ${s.name} è passata sotto il controllo dei ${attacker.name}. ${survivors.length} abitanti sono stati assorbiti dai vincitori.`,
-    metadata: {
-      settlementId: s.id,
-      previousTribeId: defender.id,
-      newTribeId: attacker.id,
-      conqueredIdentityId: defender.identityId,
-      survivors: survivors.length,
-      level: s.level,
-      tier: s.tier,
-      technologiesGained: [...carried].filter((t) => !attacker.techs.includes(t)).length,
-    },
-  });
-  for (const techId of carried) grantTech(ctx, attacker, techId, "conquest", defender);
 }

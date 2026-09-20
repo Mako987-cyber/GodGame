@@ -18,6 +18,12 @@ export interface DeleteWorldResponse {
   name: string;
   deleted: Record<string, number>;
   total: number;
+  jobId?: string;
+  status?: "queued" | "running" | "completed" | "failed" | "cancelled";
+  /** `false` while the purge is still running (HTTP 202): poll `resumeDeletion`. */
+  completed?: boolean;
+  progress?: number;
+  retryAfterMs?: number | null;
 }
 
 export interface EventFilters {
@@ -36,6 +42,8 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly status: number,
+    /** Server request id, to find the logs of a failed request. */
+    readonly requestId?: string,
   ) {
     super(message);
   }
@@ -51,9 +59,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const body = (await res.json().catch(() => null)) as ({ data: T } & Partial<ApiErrorBody>) | null;
   if (!res.ok || !body || body.error) {
     throw new ApiError(
-      body?.error?.code ?? "HTTP_ERROR",
+      body?.error?.code ?? (res.status === 504 ? "TIMEOUT" : "HTTP_ERROR"),
       body?.error?.message ?? `Richiesta fallita (${res.status})`,
       res.status,
+      body?.error?.requestId ?? res.headers.get("x-request-id") ?? undefined,
     );
   }
   return body.data;
@@ -78,6 +87,9 @@ export const api = {
   /** Deletes a world and all its data; the server checks the phrase against the stored name. */
   deleteWorld: (id: string, input: { confirmation: string; worldName: string }) =>
     request<DeleteWorldResponse>(`/api/worlds/${id}`, { method: "DELETE", body: JSON.stringify(input) }),
+  /** Continues a confirmed deletion for one server time budget (idempotent). */
+  resumeDeletion: (id: string) =>
+    request<DeleteWorldResponse>(`/api/worlds/${id}/deletion`, { method: "POST" }),
   simulate: (id: string, ticks: number) =>
     request<SimulateResponse>(`/api/worlds/${id}/simulate`, {
       method: "POST",

@@ -38,25 +38,83 @@ export async function purgeWorldFromCache(queryClient: QueryClient, worldId: str
   await queryClient.invalidateQueries({ queryKey: queryKeys.worlds });
 }
 
+type DeletionClient = Pick<typeof api, "deleteWorld" | "setStatus"> &
+  Partial<Pick<typeof api, "resumeDeletion">>;
+
+export interface DeletionFlowOptions {
+  /** Called with every intermediate state while a large world is purged in several steps. */
+  onProgress?: (state: DeleteWorldResponse) => void;
+  /** Waits between two polls (injectable in tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Upper bound of polls before giving up (the server keeps the world hidden and resumable). */
+  maxPolls?: number;
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Polls a confirmed deletion until it completes. */
+async function pollDeletion(
+  worldId: string,
+  first: DeleteWorldResponse,
+  client: DeletionClient,
+  options: DeletionFlowOptions,
+): Promise<DeleteWorldResponse> {
+  let state = first;
+  const sleep = options.sleep ?? defaultSleep;
+  for (let i = 0; state.completed === false; i++) {
+    if (!client.resumeDeletion || i >= (options.maxPolls ?? 600))
+      throw new ApiError(
+        "DELETION_PENDING",
+        "L'eliminazione è ancora in corso: il mondo resta nascosto e verrà completata riaprendo la lista dei mondi.",
+        202,
+      );
+    options.onProgress?.(state);
+    await sleep(state.retryAfterMs ?? 1000);
+    state = await client.resumeDeletion(worldId);
+  }
+  return state;
+}
+
 /**
- * Pauses the world if needed, deletes it, and clears the cache. A world that is already gone
- * (404) counts as deleted: the goal of the request is reached either way.
+ * Pauses the world if needed, deletes it (polling while a large world is purged in several
+ * steps), and clears the cache. A world that is already gone (404) counts as deleted: the goal
+ * of the request is reached either way.
  */
 export async function deleteWorldFlow(
   queryClient: QueryClient,
-  world: { id: string; name: string; status: "running" | "paused" },
+  world: { id: string; name: string; status: "running" | "paused" | "deleting" },
   typed: string,
-  client: Pick<typeof api, "deleteWorld" | "setStatus"> = api,
+  client: DeletionClient = api,
+  options: DeletionFlowOptions = {},
 ): Promise<DeleteWorldResponse | null> {
   if (world.status === "running") await client.setStatus(world.id, "paused");
   let result: DeleteWorldResponse | null = null;
   try {
     result = await client.deleteWorld(world.id, { confirmation: typed, worldName: world.name });
+    result = await pollDeletion(world.id, result, client, options);
   } catch (error) {
     if (!(error instanceof ApiError && error.code === "NOT_FOUND")) throw error;
   }
   await purgeWorldFromCache(queryClient, world.id);
   return result;
+}
+
+/** Resumes a deletion confirmed earlier (world listed as "deleting"): no confirmation needed. */
+export async function resumeDeletionFlow(
+  queryClient: QueryClient,
+  worldId: string,
+  client: Pick<typeof api, "resumeDeletion"> = api,
+  options: DeletionFlowOptions = {},
+): Promise<DeleteWorldResponse> {
+  const first = await client.resumeDeletion(worldId);
+  const done = await pollDeletion(
+    worldId,
+    first,
+    { ...client, deleteWorld: api.deleteWorld, setStatus: api.setStatus },
+    options,
+  );
+  await purgeWorldFromCache(queryClient, worldId);
+  return done;
 }
 
 /** User-facing message for a failed deletion. */
@@ -71,6 +129,12 @@ export function deletionErrorMessage(error: unknown): string {
         return "È in corso una simulazione su questo mondo: attendi qualche secondo e riprova.";
       case "FORBIDDEN":
         return "Non sei autorizzato a eliminare questo mondo.";
+      case "WORLD_BUSY":
+        return "Il mondo è momentaneamente bloccato da un'altra operazione: nessun dato è stato eliminato, riprova tra qualche secondo.";
+      case "DELETION_FAILED":
+        return `L'eliminazione si è interrotta: il mondo resta nascosto e puoi riprovare per completarla.${error.requestId ? ` (codice richiesta ${error.requestId})` : ""}`;
+      case "DELETION_PENDING":
+        return error.message;
       default:
         return error.message;
     }

@@ -13,6 +13,7 @@ import {
   deleteWorldFlow,
   deletionErrorMessage,
   purgeWorldFromCache,
+  resumeDeletionFlow,
 } from "@/lib/client/world-deletion";
 import { buildIsometricMapViewModel, HexGrid } from "@/lib/map-renderer";
 import {
@@ -302,6 +303,106 @@ describe("eliminazione dal client", () => {
     expect(deletionErrorMessage(err)).toMatch(/non corrisponde/);
     // Nothing was forgotten: the world still exists.
     expect(qc2.getQueryData(queryKeys.world("w1"))).toEqual({ any: 1 });
+  });
+
+  it("mondo grande: 202 in corso → ripresa finché completata, con progresso; poi cache svuotata", async () => {
+    const qc = seeded();
+    const states = [0.4, 0.8, 1];
+    const client = {
+      setStatus: vi.fn(),
+      deleteWorld: vi.fn(async () => ({
+        worldId: "w1",
+        name: "Terra",
+        deleted: {},
+        total: 10,
+        completed: false,
+        progress: 0.1,
+        retryAfterMs: 5,
+      })),
+      resumeDeletion: vi.fn(async () => {
+        const progress = states.shift() ?? 1;
+        return {
+          worldId: "w1",
+          name: "Terra",
+          deleted: {},
+          total: 10,
+          completed: progress === 1,
+          progress,
+          retryAfterMs: 5,
+        };
+      }),
+    };
+    const seen: number[] = [];
+    const slept: number[] = [];
+    const done = await deleteWorldFlow(qc, world, "ELIMINA Terra", client as never, {
+      onProgress: (s) => seen.push(s.progress ?? -1),
+      sleep: async (ms) => void slept.push(ms),
+    });
+    expect(done?.completed).toBe(true);
+    expect(client.resumeDeletion).toHaveBeenCalledTimes(3);
+    expect(seen).toEqual([0.1, 0.4, 0.8]);
+    expect(slept).toEqual([5, 5, 5]);
+    // Cache invalidated only after completion.
+    expect(qc.getQueryData(queryKeys.world("w1"))).toBeUndefined();
+    expect(qc.getQueryData<WorldListItem[]>(queryKeys.worlds)).toEqual([other]);
+  });
+
+  it("un'eliminazione che non finisce entro il limite di polling non svuota la cache e lo dice", async () => {
+    const qc = seeded();
+    const pending = {
+      worldId: "w1",
+      name: "Terra",
+      deleted: {},
+      total: 1,
+      completed: false,
+      progress: 0.5,
+      retryAfterMs: 1,
+    };
+    const client = {
+      setStatus: vi.fn(),
+      deleteWorld: vi.fn(async () => pending),
+      resumeDeletion: vi.fn(async () => pending),
+    };
+    const err = await deleteWorldFlow(qc, world, "ELIMINA Terra", client as never, {
+      sleep: async () => undefined,
+      maxPolls: 3,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(deletionErrorMessage(err)).toMatch(/ancora in corso/);
+    expect(qc.getQueryData(queryKeys.world("w1"))).toEqual({ any: 1 });
+  });
+
+  it("ripresa di un'eliminazione confermata in precedenza (mondo elencato come 'in eliminazione')", async () => {
+    const qc = seeded();
+    const client = {
+      resumeDeletion: vi
+        .fn()
+        .mockResolvedValueOnce({
+          worldId: "w1",
+          name: "Terra",
+          deleted: {},
+          total: 1,
+          completed: false,
+          progress: 0.5,
+          retryAfterMs: 1,
+        })
+        .mockResolvedValueOnce({
+          worldId: "w1",
+          name: "Terra",
+          deleted: {},
+          total: 2,
+          completed: true,
+          progress: 1,
+        }),
+    };
+    const done = await resumeDeletionFlow(qc, "w1", client as never, { sleep: async () => undefined });
+    expect(done.completed).toBe(true);
+    expect(qc.getQueryData(queryKeys.world("w1"))).toBeUndefined();
+  });
+
+  it("messaggi chiari per mondo bloccato e cancellazione interrotta (con codice richiesta)", () => {
+    expect(deletionErrorMessage(new ApiError("WORLD_BUSY", "x", 409))).toMatch(/bloccato/);
+    expect(deletionErrorMessage(new ApiError("DELETION_FAILED", "x", 500, "req-1"))).toMatch(/req-1/);
   });
 
   it("purgeWorldFromCache tocca solo il mondo indicato", async () => {

@@ -1,6 +1,7 @@
 import type { Community, SimContext } from "./context";
 import { actor, emitEvent } from "./events";
 import { cellsInRadius, clamp, round } from "./grid";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import type { Cell, CultureTraits, Tribe } from "./types";
 
 export interface TechEffects {
@@ -599,14 +600,17 @@ export function grantTech(
     }
   }
   const major = tech.category === "organization" || tech.category === "metals" || techId === "agriculture";
+  const people = peoplePhrase(tribe);
   const how =
     method === "invention"
-      ? "ha scoperto"
+      ? t("{v:people:ha|hanno} scoperto", { people })
       : method === "diffusion"
-        ? `ha appreso dai ${sourceTribe?.name ?? "vicini"}`
+        ? sourceTribe
+          ? t("{v:people:ha|hanno} appreso {da:source}", { people, source: peoplePhrase(sourceTribe) })
+          : t("{v:people:ha|hanno} appreso dai vicini", { people })
         : method === "conquest"
-          ? "ha acquisito con la conquista"
-          : "ha appreso dai nuovi arrivati";
+          ? t("{v:people:ha|hanno} acquisito con la conquista", { people })
+          : t("{v:people:ha|hanno} appreso dai nuovi arrivati", { people });
   emitEvent(ctx, {
     type: "tech_discovered",
     subtype: method,
@@ -619,9 +623,13 @@ export function grantTech(
     x: tribe.x,
     y: tribe.y,
     title: `${tribe.name}: ${tech.name}`,
-    description: `La tribù ${tribe.name} ${how} la tecnica: ${tech.name.toLowerCase()}. ${tech.effectSummary}.${
-      inventor ? ` L'intuizione si deve a ${inventor.name}.` : ""
-    }`,
+    description: t("{Art:people} {how} la tecnica: {tech}. {effect}.{inventor}", {
+      people,
+      how,
+      tech: tech.name.toLowerCase(),
+      effect: tech.effectSummary,
+      inventor: inventor ? ` L'intuizione si deve a ${inventor.name}.` : "",
+    }),
     metadata: {
       techId,
       method,
@@ -707,7 +715,14 @@ export function advanceAdoption(ctx: SimContext, tribe: Tribe, population: numbe
         x: tribe.x,
         y: tribe.y,
         title: `${tribe.name}: ${tech.name} entra nell'uso comune`,
-        description: `Quello che era il sapere di pochi è ora pratica quotidiana tra i ${tribe.name}: ${tech.name.toLowerCase()} (${tech.effectSummary}).`,
+        description: t(
+          "Quello che era il sapere di pochi è ora pratica quotidiana presso {art:people}: {tech} ({effect}).",
+          {
+            people: peoplePhrase(tribe),
+            tech: tech.name.toLowerCase(),
+            effect: tech.effectSummary,
+          },
+        ),
         metadata: { techId: id, adoption: 1, category: tech.category },
       });
     }

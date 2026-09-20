@@ -1,4 +1,9 @@
-import { maxRosterSize } from "@genesis/simulation-core";
+import {
+  IDENTITY_ERA_GROUPS,
+  MAX_ROSTER_SIZE,
+  maxRosterSize,
+  type IdentityEraGroup,
+} from "@genesis/simulation-core";
 import type { IdentitySummaryDTO } from "@/lib/dto";
 
 export { maxRosterSize };
@@ -20,6 +25,27 @@ export const CATEGORY_LABELS: Record<string, string> = {
   indigenous: "Popoli indigeni",
   regional: "Regionali",
 };
+
+/** Era filters of the catalog: "Moderne" covers the early modern and the contemporary age. */
+export const ERA_FILTERS: readonly { key: IdentityEraGroup | ""; label: string }[] = [
+  { key: "", label: "Tutte" },
+  { key: "ancient", label: "Antiche" },
+  { key: "classical", label: "Classiche" },
+  { key: "medieval", label: "Medievali" },
+  { key: "modern", label: "Moderne" },
+  { key: "indigenous", label: "Indigene" },
+  { key: "regional", label: "Regionali" },
+];
+
+export function eraOf(category: string): IdentityEraGroup | null {
+  for (const [era, categories] of Object.entries(IDENTITY_ERA_GROUPS))
+    if ((categories as readonly string[]).includes(category)) return era as IdentityEraGroup;
+  return null;
+}
+
+/** Identities of the modern age are cultural starting points, never states already formed. */
+export const MODERN_IDENTITY_NOTICE =
+  "Identità dell'età moderna: ispirazione culturale e visiva, non uno stato moderno già formato. Parte con utensili di pietra, un accampamento e un clan, come tutte.";
 
 export const CONTINENT_LABELS: Record<string, string> = {
   africa: "Africa",
@@ -44,10 +70,25 @@ export const IDENTITY_TYPE_LABELS: Record<string, string> = {
   composite: "Identità composita",
 };
 
+export const PLACEMENT_SIZE_LABELS: Record<string, string> = {
+  small: "piccola",
+  medium: "media",
+  large: "grande",
+};
+
+export const PLACEMENT_TIER_LABELS: Record<string, string> = {
+  preferred: "fascia preferita",
+  fallback: "fascia allargata (ripiego)",
+  unbalanced: "senza bilanciamento",
+};
+
 export const CIV_STATUS_LABELS: Record<string, string> = {
   active: "Attiva",
   successor: "Stato successore",
+  vassal: "Stato vassallo",
+  occupied: "Occupata",
   absorbed: "Assorbita",
+  merged: "Confluita in un'identità composita",
   dissolved: "Dissolta",
 };
 
@@ -76,12 +117,13 @@ function fold(text: string): string {
 /** Client-side filter of the (small) catalog already loaded by the picker. */
 export function filterIdentities(
   items: readonly IdentitySummaryDTO[],
-  filters: { search: string; category: string; continent: string },
+  filters: { search: string; category: string; continent: string; era?: string },
 ): IdentitySummaryDTO[] {
   const term = fold(filters.search.trim());
   return items.filter(
     (i) =>
       (!filters.category || i.broadCategory === filters.category) &&
+      (!filters.era || eraOf(i.broadCategory) === filters.era) &&
       (!filters.continent || i.continent === filters.continent) &&
       (!term ||
         [i.displayName, i.key, ...i.aliases, ...i.geographicAssociations].some((v) =>
@@ -116,7 +158,7 @@ export function competitivePreset(state: RosterFormState): RosterFormState {
   return { ...state, enableIdentityModifiers: false, balancedPlacement: true, equalStartingLevel: true };
 }
 
-export const ROSTER_LIMITS = { min: 2, max: 20 } as const;
+export const ROSTER_LIMITS = { min: 2, max: MAX_ROSTER_SIZE } as const;
 
 /** Message explaining why the roster cannot be submitted yet, or null when it is valid. */
 export function rosterProblem(state: RosterFormState, mapSize?: number): string | null {

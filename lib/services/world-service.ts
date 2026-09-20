@@ -32,12 +32,24 @@ import {
   loadWorldState,
   persistSimulation,
   recordSimulationRun,
+  WorldDeletedError,
   updateWorldStatus,
 } from "@/lib/db/queries";
-import type { EventRow, WorldRow } from "@/lib/db/schema";
-import { deleteWorldTransaction, WorldNotFoundError, type WorldTableName } from "@/lib/db/world-deletion";
+import type { EventRow, WorldDeletionJobRow, WorldRow } from "@/lib/db/schema";
+import {
+  findLatestJob,
+  findOpenJob,
+  listOpenJobs,
+  listResumableJobs,
+  runDeletionSlice,
+  SimulationBusyError,
+  tombstoneWorld,
+  WorldNotFoundError,
+  type WorldTableName,
+} from "@/lib/db/world-deletion";
+import { boundedTransaction, isTransientDbError, pgErrorCode } from "@/lib/db/tx";
 import * as schema from "@/lib/db/schema";
-import { simulationConfig } from "@/lib/config";
+import { deletionConfig, simulationConfig } from "@/lib/config";
 import type {
   CivilizationDTO,
   EventDTO,
@@ -148,7 +160,15 @@ export async function createWorldService(input: CreateWorldInput, deps?: Service
 
 export async function listWorldsService(deps?: Pick<ServiceDeps, "db">): Promise<WorldListItem[]> {
   const { db } = deps ?? (await defaultDeps());
-  return (await listWorldRows(db)).map(toListItem);
+  const rows = await listWorldRows(db);
+  const deleting = rows.filter((r) => r.status === "deleting").map((r) => r.id);
+  const jobs = deleting.length ? await listOpenJobs(db, deleting) : [];
+  const byWorld = new Map(jobs.map((j) => [j.worldId, j]));
+  return rows.map((row) => {
+    const item = toListItem(row);
+    const job = byWorld.get(row.id);
+    return job ? { ...item, deletion: { jobId: job.id, status: job.status, progress: job.progress } } : item;
+  });
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -174,6 +194,9 @@ export async function getWorldDetailService(
     notable,
     techRows,
     dynasties,
+    vassalages,
+    occupations,
+    composites,
   } = entities;
 
   const tribeIndex = new Map(tribes.map((t, i) => [t.id, i]));
@@ -356,7 +379,10 @@ export async function getWorldDetailService(
         government,
         identityId: t.identityId ?? null,
         identityType: t.identityType ?? "legacy",
-        emblemKey: getIdentity(t.identityId)?.visualProfile.emblemKey ?? null,
+        emblemKey:
+          getIdentity(t.identityId)?.visualProfile.emblemKey ??
+          composites.find((c) => c.id === t.identityId)?.visualProfile.emblemKey ??
+          null,
         absorbedIdentityIds: t.absorbedIdentityIds ?? [],
         absorbedByTribeId: t.absorbedByTribeId ?? null,
         stability: t.stability ?? initialStability(),
@@ -482,12 +508,59 @@ export async function getWorldDetailService(
           balancedPlacement: row.roster.config.balancedPlacement,
           equalStartingLevel: row.roster.config.equalStartingLevel,
           entries: row.roster.entries.map((e) => ({ ...e })),
+          placement: row.roster.placement ?? null,
         }
       : null,
     identities: [...usedIdentities]
       .map((key) => getIdentity(key))
       .filter((i) => i !== undefined)
       .map(toIdentitySummary),
+    vassalages: vassalages.map((v) => ({
+      id: v.id,
+      overlordCivilizationId: v.overlordCivilizationId,
+      vassalCivilizationId: v.vassalCivilizationId,
+      startedYear: v.startedYear,
+      endedYear: v.endedYear,
+      tributePolicy: v.tributePolicy,
+      autonomy: round2(v.autonomy),
+      militaryObligation: round2(v.militaryObligation),
+      diplomaticStatus: v.diplomaticStatus,
+      endReason: v.endReason ?? null,
+      totalTribute: round2(v.totalTribute),
+      lastTribute: round2(v.lastTribute),
+    })),
+    occupations: occupations.map((o) => ({
+      id: o.id,
+      occupyingCivilizationId: o.occupyingCivilizationId,
+      occupiedCivilizationId: o.occupiedCivilizationId,
+      occupiedSettlementId: o.occupiedSettlementId,
+      startedYear: o.startedYear,
+      endedYear: o.endedYear,
+      occupationPolicy: o.occupationPolicy,
+      resistance: round2(o.resistance),
+      control: round2(o.control),
+      status: o.status,
+      upkeepPaid: round2(o.upkeepPaid),
+      extracted: round2(o.extracted),
+    })),
+    composites: composites.map((c) => ({
+      id: c.id,
+      displayName: c.displayName,
+      collectiveName: c.collectiveName,
+      adjective: c.adjective,
+      sourceIdentityIds: c.sourceIdentityIds,
+      sourceNames: c.sourceIdentityIds.map(
+        (key) => getIdentity(key)?.displayName ?? composites.find((x) => x.id === key)?.displayName ?? key,
+      ),
+      sourceCivilizationIds: c.sourceCivilizationIds,
+      civilizationId: c.civilizationId,
+      primaryColor: c.visualProfile.primaryColor,
+      secondaryColor: c.visualProfile.secondaryColor,
+      emblemKey: c.visualProfile.emblemKey,
+      createdYear: c.createdYear,
+      status: c.status,
+      tags: c.culturalProfile.tags,
+    })),
   };
 }
 
@@ -535,14 +608,56 @@ export interface Actor {
 }
 export const ANONYMOUS: Actor = { userId: null };
 
+/**
+ * State of a world deletion, as returned by `DELETE /api/worlds/:id` and the deletion
+ * endpoints. `deleted`/`total` keep the shape of the former synchronous response.
+ */
 export interface DeleteWorldResult {
   worldId: string;
   name: string;
-  deleted: Record<WorldTableName, number>;
+  jobId: string;
+  status: WorldDeletionJobRow["status"];
+  /** True once the world row and every row of the world are gone (verified). */
+  completed: boolean;
+  /** 0..1, by tables cleared. */
+  progress: number;
+  currentPhase: string | null;
+  deleted: Partial<Record<WorldTableName, number>>;
   total: number;
+  attempts: number;
+  errorCode: string | null;
+  /** When to call again (in progress, busy or after a transient error); null when done. */
+  retryAfterMs: number | null;
 }
 
-/** Every precondition of a deletion, checked before taking the lock and again inside the transaction. */
+export interface DeletionDeps extends Partial<ServiceDeps> {
+  actor?: Actor;
+  /** Correlates the logs of one request (Vercel request id when available). */
+  requestId?: string;
+  /** Overrides the time budget of the slice run inside the request. */
+  budgetMs?: number;
+  batchSizes?: Partial<Record<string, number>>;
+}
+
+export function toDeletionResult(job: WorldDeletionJobRow): DeleteWorldResult {
+  const done = job.status === "completed";
+  return {
+    worldId: job.worldId,
+    name: job.worldName,
+    jobId: job.id,
+    status: job.status,
+    completed: done,
+    progress: job.progress,
+    currentPhase: job.currentPhase,
+    deleted: job.deletedByTable as Partial<Record<WorldTableName, number>>,
+    total: job.deletedRows,
+    attempts: job.attempts,
+    errorCode: job.errorCode,
+    retryAfterMs: done || job.status === "failed" ? null : deletionConfig().pollIntervalMs,
+  };
+}
+
+/** Every precondition of a deletion, checked inside the transaction that locks the world row. */
 function assertDeletable(row: WorldRow, input: DeleteWorldInput, actor: Actor) {
   // Ownership is reserved for future authentication: an owned world can only be deleted by its
   // owner, and an anonymous request can never prove to be the owner.
@@ -560,60 +675,137 @@ function assertDeletable(row: WorldRow, input: DeleteWorldInput, actor: Actor) {
   }
 }
 
+async function runSlice(db: Database, jobId: string, deps?: DeletionDeps): Promise<DeleteWorldResult> {
+  const config = deletionConfig();
+  const { outcome, job } = await runDeletionSlice(db, jobId, {
+    budgetMs: deps?.budgetMs ?? config.budgetMs,
+    leaseMs: config.leaseMs,
+    timeouts: {
+      lockTimeoutMs: config.lockTimeoutMs,
+      statementTimeoutMs: config.statementTimeoutMs,
+      idleInTransactionMs: config.idleInTransactionMs,
+    },
+    batchSizes: deps?.batchSizes,
+    requestId: deps?.requestId,
+  });
+  if (outcome === "failed") {
+    throw new AppError(
+      "DELETION_FAILED",
+      "Eliminazione interrotta da un errore: il mondo resta nascosto e l'eliminazione può essere ripresa",
+      { jobId: job.id, errorCode: job.errorCode },
+    );
+  }
+  return toDeletionResult(job);
+}
+
 /**
  * Deletes one world and every row that belongs to it.
  *
  * Guard rails: typed confirmation checked against the stored name, ownership, the world must be
- * paused, the per-world simulation lock is held (no batch can start or be running), and the
- * deletion itself is one transaction that locks the world row, re-checks everything, deletes
- * all child tables scoped by `world_id`, and verifies that nothing is left before committing.
+ * paused and no simulation batch may hold the world lock. They are all checked inside one short
+ * transaction that locks the world row with a `lock_timeout` (an orphaned transaction can make
+ * the request fail with 409 WORLD_BUSY, never hang it) and tombstones the world. The purge then
+ * runs set-based batches for at most `budgetMs`: small and medium worlds complete within the
+ * request (`completed: true`), a huge one answers `completed: false` and is resumed by
+ * `resumeWorldDeletionService` (client polling, or the optional cron).
  */
 export async function deleteWorldService(
   worldId: string,
   input: DeleteWorldInput,
-  deps?: ServiceDeps & { actor?: Actor },
+  deps?: DeletionDeps,
 ): Promise<DeleteWorldResult> {
-  const { db, lock } = deps ?? (await defaultDeps());
+  const db = deps?.db ?? (await getDb());
   const actor = deps?.actor ?? ANONYMOUS;
-  const row = await getWorldRow(db, worldId);
-  if (!row) throw notFound();
-  assertDeletable(row, input, actor);
-
-  const ttl = simulationConfig().lockTtlMs;
-  let handle: Awaited<ReturnType<SimulationLock["acquire"]>>;
-  try {
-    handle = await lock.acquire(worldId, ttl);
-  } catch (error) {
-    // The world vanished meanwhile (the lock row references it): that is a concurrent deletion.
-    if (!(await getWorldRow(db, worldId))) throw notFound();
-    throw mapDbError(error);
-  }
-  if (!handle) {
-    throw new AppError(
-      "SIMULATION_IN_PROGRESS",
-      "Una simulazione o un'altra operazione è in corso su questo mondo: riprova tra qualche secondo",
-    );
-  }
   const started = Date.now();
+  let job: WorldDeletionJobRow;
   try {
-    const { row: deletedRow, deleted } = await deleteWorldTransaction(db, worldId, (locked) =>
-      assertDeletable(locked, input, actor),
-    );
-    const total = Object.values(deleted).reduce((a, b) => a + b, 0);
-    logger.info("world.deleted", { worldId, total, durationMs: Date.now() - started, deleted });
-    return { worldId, name: deletedRow.name, deleted, total };
+    ({ job } = await tombstoneWorld(db, worldId, (row) => assertDeletable(row, input, actor), {
+      requestedBy: actor.userId,
+    }));
   } catch (error) {
     if (error instanceof WorldNotFoundError) throw notFound();
-    if (!(error instanceof AppError))
-      logger.error("world.delete_failed", { worldId, ...errorDetails(error) });
-    throw error instanceof AppError
-      ? error
-      : new AppError("DATABASE_ERROR", "Eliminazione non riuscita: nessun dato è stato modificato");
-  } finally {
-    await lock
-      .release(handle)
-      .catch((e) => logger.error("world.delete_unlock_failed", { worldId, ...errorDetails(e) }));
+    if (error instanceof SimulationBusyError)
+      throw new AppError(
+        "SIMULATION_IN_PROGRESS",
+        "Una simulazione o un'altra operazione è in corso su questo mondo: riprova tra qualche secondo",
+      );
+    if (error instanceof AppError) throw error;
+    const code = pgErrorCode(error);
+    logger.error("world.delete.tombstone_failed", {
+      worldId,
+      requestId: deps?.requestId,
+      pgCode: code,
+      durationMs: Date.now() - started,
+      ...errorDetails(error),
+    });
+    if (isTransientDbError(error))
+      throw new AppError(
+        "WORLD_BUSY",
+        "Il mondo è bloccato da un'altra operazione sul database: nessun dato è stato eliminato, riprova tra qualche secondo",
+        { pgCode: code },
+      );
+    throw new AppError("DATABASE_ERROR", "Eliminazione non riuscita: nessun dato è stato modificato");
   }
+  logger.info("world.delete.accepted", {
+    worldId,
+    jobId: job.id,
+    requestId: deps?.requestId,
+    durationMs: Date.now() - started,
+  });
+  return runSlice(db, job.id, deps);
+}
+
+/**
+ * Continues the deletion of a world already confirmed (tombstoned). Idempotent: on a finished
+ * deletion it returns the completed job; 404 only when no deletion of this world ever existed.
+ */
+export async function resumeWorldDeletionService(
+  worldId: string,
+  deps?: DeletionDeps,
+): Promise<DeleteWorldResult> {
+  const db = deps?.db ?? (await getDb());
+  const actor = deps?.actor ?? ANONYMOUS;
+  const open = await findOpenJob(db, worldId);
+  if (!open) {
+    const latest = await findLatestJob(db, worldId);
+    if (latest) return toDeletionResult(latest);
+    throw new AppError("NOT_FOUND", "Nessuna eliminazione in corso per questo mondo");
+  }
+  if (open.requestedBy !== null && open.requestedBy !== actor.userId)
+    throw new AppError("FORBIDDEN", "Non sei autorizzato a proseguire questa eliminazione");
+  return runSlice(db, open.id, deps);
+}
+
+/** Read-only state of the latest deletion of a world. */
+export async function getWorldDeletionService(
+  worldId: string,
+  deps?: Pick<ServiceDeps, "db">,
+): Promise<DeleteWorldResult> {
+  const { db } = deps ?? (await defaultDeps());
+  const latest = await findLatestJob(db, worldId);
+  if (!latest) throw new AppError("NOT_FOUND", "Nessuna eliminazione per questo mondo");
+  return toDeletionResult(latest);
+}
+
+/** Cron helper: advances deletions nobody is polling any more (tab closed mid-deletion). */
+export async function resumePendingDeletionsService(
+  limit: number,
+  deps?: Pick<ServiceDeps, "db"> & { budgetMs?: number },
+): Promise<DeleteWorldResult[]> {
+  const { db } = deps ?? (await defaultDeps());
+  const out: DeleteWorldResult[] = [];
+  for (const job of await listResumableJobs(db, limit)) {
+    try {
+      out.push(await runSlice(db, job.id, { db, budgetMs: deps?.budgetMs }));
+    } catch (error) {
+      logger.warn("world.delete.sweep_failed", {
+        jobId: job.id,
+        worldId: job.worldId,
+        ...errorDetails(error),
+      });
+    }
+  }
+  return out;
 }
 
 export async function getEventsService(
@@ -712,26 +904,20 @@ export async function getPersonService(
   };
 }
 
-function isPostgresError(error: unknown): error is { code: string; message: string } {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code: unknown }).code === "string" &&
-    /^[0-9A-Z]{5}$/.test((error as { code: string }).code)
-  );
-}
-
 function mapDbError(error: unknown): unknown {
   if (error instanceof AppError) return error;
-  const cause = error instanceof Error && error.cause ? error.cause : error;
-  if (isPostgresError(cause)) {
-    if (cause.code === "57014")
-      return new AppError("TIMEOUT", "Il database ha interrotto l'operazione per timeout");
+  if (error instanceof WorldDeletedError) return notFound();
+  const code = pgErrorCode(error);
+  if (code === "57014") return new AppError("TIMEOUT", "Il database ha interrotto l'operazione per timeout");
+  if (code === "55P03")
+    return new AppError(
+      "WORLD_BUSY",
+      "Il mondo è bloccato da un'altra operazione sul database: il batch non è stato salvato, riprova",
+    );
+  if (code)
     return new AppError("DATABASE_ERROR", "Errore del database durante il salvataggio della simulazione", {
-      code: cause.code,
+      code,
     });
-  }
   return error;
 }
 
@@ -769,7 +955,11 @@ export async function simulateWorldService(
     if (result.ticksRun === 0)
       throw new AppError("TIMEOUT", "Tempo di calcolo esaurito prima di completare un tick");
 
-    const summary = await db.transaction((tx) => persistSimulation(tx, loaded, result));
+    // Bounded: an orphaned transaction on the world row makes the batch fail fast (and be
+    // retried) instead of hanging the function; statements of a big world get more time.
+    const summary = await boundedTransaction(db, (tx) => persistSimulation(tx, loaded, result), {
+      statementTimeoutMs: config.persistStatementTimeoutMs,
+    });
     const durationMs = Date.now() - started;
     const sum = (
       k:

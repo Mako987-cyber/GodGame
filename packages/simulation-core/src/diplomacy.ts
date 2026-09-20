@@ -1,4 +1,6 @@
 import { CONTACT_DISTANCE } from "./constants";
+import { agree } from "./language/italian";
+import { formatEventDescription as t, polityPhrase } from "./language/format";
 import type { Community, SimContext } from "./context";
 import { isUnderEpidemic } from "./crises";
 import { culturalDistance } from "./culture";
@@ -9,6 +11,7 @@ import { areaDeposits } from "./resources";
 import { getResourceAmount } from "./stock";
 import { shareKnowledge, tribeEffects } from "./technology";
 import type { ConflictPhase, DiplomaticStatus, Relationship, Tribe } from "./types";
+import { imposePeaceTerms, vassalBond } from "./politics";
 import { combatSide, sidePower, wageConflict } from "./warfare";
 
 export interface TribeProfile {
@@ -159,6 +162,7 @@ export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProf
           phase: "peace",
           lastConflictYear: null,
           phaseYears: 0,
+          fusionYears: 0,
         };
         state.relationships.push(rel);
         byKey.set(key, rel);
@@ -171,7 +175,10 @@ export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProf
             actors: [actor.tribe(a.tribe), actor.tribe(b.tribe)],
             x: pair.ca.x,
             y: pair.ca.y,
-            title: `I ${a.tribe.name} incontrano i ${b.tribe.name}`,
+            title: t("{Art:a} {v:a:incontra|incontrano} {art:b}", {
+              a: polityPhrase(a.tribe, state.civilizations),
+              b: polityPhrase(b.tribe, state.civilizations),
+            }),
             description: `Due gruppi finora ignari l'uno dell'altro si sono incontrati a ${pair.d} celle di distanza.`,
             metadata: {
               distance: pair.d,
@@ -186,6 +193,9 @@ export function updateDiplomacy(ctx: SimContext, profiles: Map<string, TribeProf
       updateRelationValues(rel, a, b, pair.d);
       if (pair.d > CONTACT_DISTANCE && !rel.atWar) {
         updateStatus(rel, state.year, phaseBefore);
+        // Explicit political bonds are visible in diplomacy (unless the pair is at war).
+        if (!rel.atWar && vassalBond(state, rel.aId, rel.bId)) rel.status = "vassalage";
+        else if (!rel.atWar && occupies(state, rel.aId, rel.bId)) rel.status = "occupation";
         continue;
       }
       decideAction(ctx, rel, a, b, pair, profiles);
@@ -214,6 +224,16 @@ function updateStatus(rel: Relationship, year: number, phaseBefore: ConflictPhas
   else status = "contact";
   rel.status = status;
   rel.phaseYears = rel.phase === phaseBefore ? rel.phaseYears + 1 : 0;
+}
+
+/** One side of the pair holds settlements of the other under occupation. */
+function occupies(state: SimContext["state"], aId: string, bId: string): boolean {
+  return state.occupations.some(
+    (o) =>
+      o.status === "active" &&
+      ((o.occupyingCivilizationId === aId && o.occupiedCivilizationId === bId) ||
+        (o.occupyingCivilizationId === bId && o.occupiedCivilizationId === aId)),
+  );
 }
 
 function updateRelationValues(rel: Relationship, a: TribeProfile, b: TribeProfile, d: number) {
@@ -293,15 +313,27 @@ function decideAction(
       rel.truceUntilYear = state.year + rng.int(20, 40);
       rel.hostility = clamp(rel.hostility - 0.45);
       rel.trust = Math.max(rel.trust, 0.1);
-      emitEvent(ctx, {
+      const peace = emitEvent(ctx, {
         type: "peace",
         subtype: exhausted ? "exhaustion" : "weariness",
         importance: 4,
         actors: [actor.tribe(a.tribe), actor.tribe(b.tribe)],
         x: pair.ca.x,
         y: pair.ca.y,
-        title: `Pace tra ${a.tribe.name} e ${b.tribe.name}`,
-        description: `Dopo ${years} anni di guerra e ${rel.battles} scontri, i ${a.tribe.name} e i ${b.tribe.name} hanno stipulato la pace${exhausted ? ": entrambi i popoli sono allo stremo" : ""}.`,
+        title: t("Pace tra {art:a} e {art:b}", {
+          a: polityPhrase(a.tribe, state.civilizations),
+          b: polityPhrase(b.tribe, state.civilizations),
+        }),
+        description: t(
+          "Dopo {years} anni di guerra e {battles} scontri, {art:a} e {art:b} hanno stipulato la pace{why}.",
+          {
+            years,
+            battles: rel.battles,
+            a: polityPhrase(a.tribe, state.civilizations),
+            b: polityPhrase(b.tribe, state.civilizations),
+            why: exhausted ? ": entrambi i popoli sono allo stremo" : "",
+          },
+        ),
         metadata: {
           years,
           battles: rel.battles,
@@ -311,6 +343,17 @@ function decideAction(
           populationB: b.population,
         },
       });
+      // A peace dictated by a much stronger side can make the loser a vassal (politics.ts).
+      // A war that was a vassal's rebellion is settled there instead.
+      if (!vassalBond(state, a.tribe.id, b.tribe.id)) {
+        const [winner, loser] = a.power >= b.power ? [a, b] : [b, a];
+        imposePeaceTerms(ctx, winner.tribe, loser.tribe, {
+          winnerPower: winner.power,
+          loserPower: loser.power,
+          battles: rel.battles,
+          causeEventId: peace.id || null,
+        });
+      }
       return;
     }
     if (pair.d <= 12 && rng.chance(0.35)) {
@@ -346,11 +389,13 @@ function decideAction(
   const warScore = round(motive(att, def), 2);
   const advantage = round(att.power / Math.max(1, def.power), 2);
   const target = att === a ? pair.cb : pair.ca;
+  // A vassal and its overlord never escalate: their disputes become rebellions (politics.ts).
+  const bound = vassalBond(state, a.tribe.id, b.tribe.id) !== undefined;
 
   // --- Escalation ladder: tension → demand → threat → war -------------------
   const truceHolds = rel.truceUntilYear !== null && state.year < rel.truceUntilYear;
   if (!truceHolds && rel.truceUntilYear !== null) rel.truceUntilYear = null;
-  if (!truceHolds) {
+  if (!truceHolds && !bound) {
     if (warScore > 0.3 && rel.phase === "peace") {
       rel.phase = "tension";
     } else if (
@@ -370,10 +415,15 @@ function decideAction(
         actors: [actor.tribe(att.tribe), actor.tribe(def.tribe)],
         x: target.x,
         y: target.y,
-        title: `I ${att.tribe.name} avanzano pretese sui ${def.tribe.name}`,
-        description: `I ${att.tribe.name} chiedono ai ${def.tribe.name} terre e scorte: ${
-          att.scarcity > 0.3 ? "la fame morde" : "la pressione sui confini cresce"
-        }.`,
+        title: t("{Art:att} {v:att:avanza|avanzano} pretese {su:def}", {
+          att: polityPhrase(att.tribe, state.civilizations),
+          def: polityPhrase(def.tribe, state.civilizations),
+        }),
+        description: t("{Art:att} {v:att:chiede|chiedono} {a:def} terre e scorte: {why}.", {
+          att: polityPhrase(att.tribe, state.civilizations),
+          def: polityPhrase(def.tribe, state.civilizations),
+          why: att.scarcity > 0.3 ? "la fame morde" : "la pressione sui confini cresce",
+        }),
         metadata: {
           warScore: round(warScore, 2),
           scarcity: round(att.scarcity, 2),
@@ -398,8 +448,17 @@ function decideAction(
         actors: [actor.tribe(att.tribe), actor.tribe(def.tribe)],
         x: target.x,
         y: target.y,
-        title: `Minaccia di guerra: ${att.tribe.name} contro ${def.tribe.name}`,
-        description: `Respinte le richieste, i ${att.tribe.name} radunano i guerrieri lungo il confine con i ${def.tribe.name}.`,
+        title: t("Minaccia di guerra: {att} contro {def}", {
+          att: polityPhrase(att.tribe, state.civilizations),
+          def: polityPhrase(def.tribe, state.civilizations),
+        }),
+        description: t(
+          "Respinte le richieste, {art:att} {v:att:raduna|radunano} i guerrieri lungo il confine con {art:def}.",
+          {
+            att: polityPhrase(att.tribe, state.civilizations),
+            def: polityPhrase(def.tribe, state.civilizations),
+          },
+        ),
         metadata: { warScore, advantage, distance: pair.d },
       });
       return;
@@ -411,6 +470,7 @@ function decideAction(
   if (
     elapsed >= state.settings.warGraceYears &&
     !truceHolds &&
+    !bound &&
     (rel.phase === "threat" || rel.phase === "raid") &&
     att.population >= 20 &&
     def.population >= 10 &&
@@ -437,8 +497,17 @@ function decideAction(
       actors: [actor.tribe(att.tribe), actor.tribe(def.tribe)],
       x: target.x,
       y: target.y,
-      title: `Guerra tra ${att.tribe.name} e ${def.tribe.name}`,
-      description: `I ${att.tribe.name} hanno dichiarato guerra ai ${def.tribe.name}${reasons.length ? `, spinti ${reasons.join(", ")}` : ""}.`,
+      title: t("Guerra tra {art:att} e {art:def}", {
+        att: polityPhrase(att.tribe, state.civilizations),
+        def: polityPhrase(def.tribe, state.civilizations),
+      }),
+      description: t("{Art:att} {v:att:ha|hanno} dichiarato guerra {a:def}{why}.", {
+        att: polityPhrase(att.tribe, state.civilizations),
+        def: polityPhrase(def.tribe, state.civilizations),
+        why: reasons.length
+          ? `, ${agree(polityPhrase(att.tribe, state.civilizations), "spinto", "spinta", "spinti", "spinte")} ${reasons.join(", ")}`
+          : "",
+      }),
       metadata: {
         attackerId: att.tribe.id,
         defenderId: def.tribe.id,
@@ -456,6 +525,7 @@ function decideAction(
 
   if (
     elapsed >= state.settings.raidGraceYears &&
+    !bound &&
     att.scarcity > 0.4 &&
     att.aggression > 0.5 &&
     advantage > 1.2 &&
@@ -527,12 +597,16 @@ function decideAction(
           x: pair.ca.x,
           y: pair.ca.y,
           subtype: firstTrade ? "first_trade" : "trade_route",
-          title: firstTrade
-            ? `Primi scambi tra ${a.tribe.name} e ${b.tribe.name}`
-            : `Rotta commerciale ${a.tribe.name}–${b.tribe.name}`,
-          description: firstTrade
-            ? `I ${a.tribe.name} e i ${b.tribe.name} hanno iniziato a scambiarsi cibo e materiali.`
-            : `Gli scambi tra ${a.tribe.name} e ${b.tribe.name} sono diventati regolari: una vera rotta commerciale.`,
+          title: t(firstTrade ? "Primi scambi tra {art:a} e {art:b}" : "Rotta commerciale {a}–{b}", {
+            a: polityPhrase(a.tribe, state.civilizations),
+            b: polityPhrase(b.tribe, state.civilizations),
+          }),
+          description: t(
+            firstTrade
+              ? "{Art:a} e {art:b} hanno iniziato a scambiarsi cibo e materiali."
+              : "Gli scambi tra {art:a} e {art:b} sono diventati regolari: una vera rotta commerciale.",
+            { a: polityPhrase(a.tribe, state.civilizations), b: polityPhrase(b.tribe, state.civilizations) },
+          ),
           metadata: {
             volume: round(volume, 2),
             totalVolume: Math.round(rel.tradeVolume),
@@ -570,8 +644,14 @@ function decideAction(
       actors: [actor.tribe(a.tribe), actor.tribe(b.tribe)],
       x: pair.ca.x,
       y: pair.ca.y,
-      title: `Alleanza tra ${a.tribe.name} e ${b.tribe.name}`,
-      description: `Anni di fiducia reciproca hanno portato i ${a.tribe.name} e i ${b.tribe.name} a stringere un'alleanza.`,
+      title: t("Alleanza tra {art:a} e {art:b}", {
+        a: polityPhrase(a.tribe, state.civilizations),
+        b: polityPhrase(b.tribe, state.civilizations),
+      }),
+      description: t("Anni di fiducia reciproca hanno portato {art:a} e {art:b} a stringere un'alleanza.", {
+        a: polityPhrase(a.tribe, state.civilizations),
+        b: polityPhrase(b.tribe, state.civilizations),
+      }),
       metadata: {
         trust: rel.trust,
         tradeVolume: Math.round(rel.tradeVolume),

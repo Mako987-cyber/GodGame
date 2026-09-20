@@ -4,7 +4,7 @@ import { parseSimulationConfig, type SimulationConfig } from "./config";
 import { DEFAULT_SETTINGS, TRIBE_COLORS } from "./constants";
 import { nextId } from "./context";
 import { initialStability, randomCulture } from "./culture";
-import { cellsInRadius, clamp, distance } from "./grid";
+import { clamp, distance } from "./grid";
 import {
   applyIdentityModifiers,
   IDENTITY_CATALOG_VERSION,
@@ -20,6 +20,7 @@ import {
 } from "./identity";
 import { tribeName } from "./names";
 import { SIMULATION_VERSION } from "./normalize";
+import { placeStarts, startingAreaScore, waterAccess } from "./placement";
 import { deriveRng, Rng } from "./prng";
 import { emptyStock } from "./stock";
 import { generateTerrain } from "./terrain";
@@ -39,12 +40,7 @@ export interface CreateWorldOptions {
   roster?: CivilizationRosterConfigInput;
 }
 
-function areaScore(state: WorldState, cell: Cell): number {
-  const area = cellsInRadius(state, cell.x, cell.y, 2);
-  const land = area.filter((c) => c.biome !== "ocean");
-  const avg = land.reduce((acc, c) => acc + c.habitability, 0) / Math.max(1, area.length);
-  return cell.habitability * 0.5 + avg * 0.5;
-}
+const areaScore = startingAreaScore;
 
 /** Picks well-separated habitable starting cells; relaxes the spacing only if the map is too cramped. */
 export function pickStartingCells(state: WorldState, count: number, rng: Rng): Cell[] {
@@ -71,9 +67,7 @@ export function pickStartingCells(state: WorldState, count: number, rng: Rng): C
 
 /** Fresh water within one cell: a river, the coast or a well-watered cell. */
 export function hasWaterAccess(state: WorldState, cell: Cell): boolean {
-  return cellsInRadius(state, cell.x, cell.y, 1).some(
-    (c) => c.biome !== "ocean" && (c.river || c.coastal || c.water >= 0.5),
-  );
+  return waterAccess(state, cell);
 }
 
 export function startingAreaQuality(state: WorldState, cell: Cell): number {
@@ -81,41 +75,12 @@ export function startingAreaQuality(state: WorldState, cell: Cell): number {
 }
 
 /**
- * Competitive placement: every starting point has water within reach and a land quality
- * inside a narrow band, the best band the map can host with the required spacing. Identities
- * play no part here (no one is placed in "their" historical region), and nothing is compensated
- * later: whatever differences remain are part of the world.
+ * Competitive placement: every starting point in the best band the map can host, with water.
+ * @deprecated Kept for API compatibility; the engine uses `placeStarts` (placement.ts), which
+ * also reports the band and tier used. `_rng` is ignored: placement has its own stream.
  */
-export function pickBalancedStartingCells(state: WorldState, count: number, rng: Rng): Cell[] {
-  const base = state.cells
-    .filter((c) => c.biome !== "ocean" && c.biome !== "mountain" && c.habitability >= 0.45)
-    .map((c) => ({ cell: c, score: areaScore(state, c), water: hasWaterAccess(state, c) }))
-    .filter((c) => c.score >= 0.4);
-  for (const requireWater of [true, false]) {
-    const candidates = base.filter((c) => !requireWater || c.water).sort((a, b) => b.score - a.score);
-    if (candidates.length < count) continue;
-    let minDistance = Math.max(7, Math.floor(Math.min(state.width, state.height) / 4));
-    while (minDistance >= 3) {
-      for (const tolerance of [0.05, 0.08, 0.12, 0.18]) {
-        for (let q = 0; q < 10; q++) {
-          const anchor = candidates[Math.floor((candidates.length * q) / 10)];
-          if (!anchor) break;
-          const pool = candidates.filter(
-            (c) => c.score <= anchor.score && c.score >= anchor.score - tolerance,
-          );
-          if (pool.length < count) continue;
-          const chosen: Cell[] = [];
-          for (const pick of rng.shuffle([...pool])) {
-            if (chosen.every((c) => distance(c.x, c.y, pick.cell.x, pick.cell.y) >= minDistance))
-              chosen.push(pick.cell);
-            if (chosen.length === count) return chosen;
-          }
-        }
-      }
-      minDistance -= 1;
-    }
-  }
-  return pickStartingCells(state, count, rng);
+export function pickBalancedStartingCells(state: WorldState, count: number, _rng?: Rng): Cell[] {
+  return placeStarts(state, count, { balanced: true }).starts.map((s) => s.cell);
 }
 
 export function createWorld(options: CreateWorldOptions): WorldState {
@@ -148,6 +113,9 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       dynasty: 0,
       construction: 0,
       crisis: 0,
+      vassalage: 0,
+      occupation: 0,
+      composite: 0,
     },
     climate: {
       modifier: 1,
@@ -169,6 +137,9 @@ export function createWorld(options: CreateWorldOptions): WorldState {
     crises: [],
     archive: { people: [], households: [] },
     roster: null,
+    vassalages: [],
+    occupations: [],
+    composites: [],
   };
   state.climate.seasons = computeSeasons(state, false);
 
@@ -267,9 +238,8 @@ function populateHistoricalWorld(
     throw new Error(
       `Posizioni di partenza insufficienti: ${identities.length} civiltà su una mappa ${state.width}×${state.height}`,
     );
-  const starts = config.balancedPlacement
-    ? pickBalancedStartingCells(state, identities.length, rng)
-    : pickStartingCells(state, identities.length, rng);
+  const placement = placeStarts(state, identities.length, { balanced: config.balancedPlacement });
+  const starts = placement.starts.map((s) => s.cell);
   const sharedSize = config.equalStartingLevel ? rng.int(settings.minTribeSize, settings.maxTribeSize) : null;
   const usedNames = new Set<string>();
   const usedPlaces = new Set<string>();
@@ -343,15 +313,20 @@ function populateHistoricalWorld(
       emblemKey: identity.visualProfile.emblemKey,
       startX: cell.x,
       startY: cell.y,
-      startQuality: Math.round(areaScore(state, cell) * 1000) / 1000,
-      startWater: hasWaterAccess(state, cell),
+      startQuality: placement.starts[slot]!.metrics.quality,
+      startWater: placement.starts[slot]!.metrics.water,
+      placementFallback: placement.starts[slot]!.fallback,
+      fertility: placement.starts[slot]!.metrics.fertility,
+      resources: placement.starts[slot]!.metrics.resources,
+      climatePenalty: placement.starts[slot]!.metrics.climatePenalty,
+      nearestStartDistance: placement.starts[slot]!.nearestStartDistance,
       population: members.length,
       initialLeaderId: leader?.id ?? null,
       initialLeaderName: leader?.name ?? null,
       homeName,
     });
   });
-  state.roster = { config, catalogVersion: IDENTITY_CATALOG_VERSION, entries };
+  state.roster = { config, catalogVersion: IDENTITY_CATALOG_VERSION, entries, placement: placement.report };
 }
 
 function populateTribe(
