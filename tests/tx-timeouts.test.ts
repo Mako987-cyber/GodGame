@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Database } from "@/lib/db";
 import { isEmbeddedDatabase, markEmbeddedDatabase } from "@/lib/db/driver";
-import { boundedTransaction } from "@/lib/db/tx";
+import { boundedTransaction, isTransientDbError, pgErrorCode } from "@/lib/db/tx";
 import { describeError } from "@/lib/utils/errors";
 import { createTestDb, QueryRecorder } from "./db-helpers";
 
@@ -64,5 +64,44 @@ describe("describeError", () => {
     const inner = new Error("boom");
     expect(describeError(new Error("boom", { cause: inner }))).toBe("boom");
     expect(describeError("plain string")).toBe("plain string");
+  });
+});
+
+describe("isTransientDbError", () => {
+  /** The exact shape Vercel logged when `db:migrate` failed the build. */
+  const poolerExhausted = () => {
+    const cause = Object.assign(
+      new Error(
+        "(ECHECKOUTTIMEOUT) unable to check out connection from the pool after 15000ms in Session mode",
+      ),
+      { code: "XX000", severity_local: "FATAL" },
+    );
+    return new Error('Failed query: CREATE SCHEMA IF NOT EXISTS "drizzle"', { cause });
+  };
+
+  it("considera transitorio il pooler saturo, nonostante lo SQLSTATE generico XX000", () => {
+    expect(isTransientDbError(poolerExhausted())).toBe(true);
+    expect(pgErrorCode(poolerExhausted())).toBe("XX000");
+  });
+
+  it("riconosce anche MaxClientsInSessionMode", () => {
+    expect(isTransientDbError(new Error("MaxClientsInSessionMode: max clients reached"))).toBe(true);
+  });
+
+  it("continua a riconoscere i codici SQLSTATE noti", () => {
+    for (const code of ["55P03", "57014", "40P01", "40001", "57P01", "57P03", "53300", "08006"])
+      expect(isTransientDbError(Object.assign(new Error("boom"), { code }))).toBe(true);
+  });
+
+  it("cerca i messaggi di connessione anche dentro la catena delle cause", () => {
+    const cause = new Error("write ECONNRESET");
+    expect(isTransientDbError(new Error("Failed query: select 1", { cause }))).toBe(true);
+  });
+
+  it("non considera transitorio un errore di schema o di sintassi", () => {
+    // 42P01 = undefined_table: riprovare non lo risolverebbe mai.
+    const cause = Object.assign(new Error('relation "worlds" does not exist'), { code: "42P01" });
+    expect(isTransientDbError(new Error("Failed query: select 1", { cause }))).toBe(false);
+    expect(isTransientDbError(new Error("boom"))).toBe(false);
   });
 });

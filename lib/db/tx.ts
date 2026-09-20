@@ -86,16 +86,40 @@ export function pgErrorCode(error: unknown): string | null {
   return null;
 }
 
+const TRANSIENT_CODES = ["55P03", "57014", "40P01", "40001", "57P01", "57P03", "53300"];
+
+/** Connection-level failures, which the driver reports by message rather than by SQLSTATE. */
+const TRANSIENT_MESSAGES = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|CONNECTION_CLOSED|CONNECT_TIMEOUT|terminat/i;
+
+/**
+ * Supavisor (the Supabase pooler) refuses a connection when its pool is saturated. It reports
+ * this as a generic `XX000`, so the SQLSTATE says nothing: only the message identifies it. The
+ * pool frees up on its own, which makes it one of the most retryable errors there is — and
+ * without this, a momentarily busy pooler looks permanent.
+ */
+const POOL_EXHAUSTED = /ECHECKOUTTIMEOUT|MaxClientsInSessionMode|max clients reached/i;
+
 /**
  * Errors worth retrying later: lock/statement timeouts, deadlocks, serialization failures,
- * dropped or refused connections. Nothing was committed by the failed transaction.
+ * dropped or refused connections, a saturated pooler. Nothing was committed by the failed
+ * transaction.
  */
 export function isTransientDbError(error: unknown): boolean {
-  const code = pgErrorCode(error);
-  if (code)
-    return (
-      ["55P03", "57014", "40P01", "40001", "57P01", "57P03", "53300"].includes(code) || code.startsWith("08")
-    );
   const message = error instanceof Error ? error.message : String(error);
-  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|CONNECTION_CLOSED|CONNECT_TIMEOUT|terminat/i.test(message);
+  const causes = [message, ...causeMessages(error)].join("\n");
+  if (POOL_EXHAUSTED.test(causes)) return true;
+  const code = pgErrorCode(error);
+  if (code) return TRANSIENT_CODES.includes(code) || code.startsWith("08");
+  return TRANSIENT_MESSAGES.test(causes);
+}
+
+/** Drizzle reports the SQL it ran and hides the driver's own message in `cause`. */
+function causeMessages(error: unknown, maxDepth = 4): string[] {
+  const out: string[] = [];
+  let e: unknown = error instanceof Error ? error.cause : undefined;
+  for (let depth = 0; e instanceof Error && depth < maxDepth; depth++) {
+    out.push(e.message);
+    e = e.cause;
+  }
+  return out;
 }
