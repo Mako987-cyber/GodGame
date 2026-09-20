@@ -9,9 +9,17 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
+  CompositeIdentity,
+  EmergentCultureProfile,
+  Occupation,
+  OccupationPolicy,
+  TerritoryReference,
+  TributePolicy,
+  VassalRelationship,
   ActiveCrisis,
   BuildingType,
   ConflictPhase,
@@ -62,7 +70,12 @@ export const worlds = pgTable(
     height: integer("height").notNull(),
     currentTick: integer("current_tick").notNull().default(0),
     currentYear: integer("current_year").notNull(),
-    status: text("status", { enum: ["paused", "running"] })
+    /**
+     * `deleting` is a tombstone: the deletion was confirmed and a `world_deletion_jobs` row is
+     * purging the data. A deleting world is invisible to every read and write path except the
+     * deletion itself, and can never go back to `paused`/`running`.
+     */
+    status: text("status", { enum: ["paused", "running", "deleting"] })
       .notNull()
       .default("paused"),
     rngState: jsonb("rng_state").$type<[number, number, number, number]>().notNull(),
@@ -313,6 +326,8 @@ export const civilizations = pgTable(
     identityType: text("identity_type").$type<IdentityType>().notNull().default("legacy"),
     politicalStem: text("political_stem"),
     formerNames: jsonb("former_names").$type<string[]>().notNull().default([]),
+    /** Political name pattern chosen at foundation; null for legacy states. */
+    namePattern: text("name_pattern"),
   },
   (t) => [
     primaryKey({ columns: [t.worldId, t.id] }),
@@ -376,6 +391,8 @@ export const relationships = pgTable(
     phase: text("phase").$type<ConflictPhase>().notNull().default("peace"),
     lastConflictYear: integer("last_conflict_year"),
     phaseYears: integer("phase_years").notNull().default(0),
+    /** Consecutive-ish years of conditions that can lead two peoples to fuse (see fusion.ts). */
+    fusionYears: integer("fusion_years").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.id] })],
 );
@@ -502,6 +519,99 @@ export const civilizationStats = pgTable(
   ],
 );
 
+/** Explicit vassal relationships (active and ended: never deleted while the world exists). */
+export const vassalRelationships = pgTable(
+  "vassal_relationships",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    overlordCivilizationId: text("overlord_civilization_id").notNull(),
+    vassalCivilizationId: text("vassal_civilization_id").notNull(),
+    startedAtTick: integer("started_at_tick").notNull(),
+    startedYear: integer("started_year").notNull(),
+    endedAtTick: integer("ended_at_tick"),
+    endedYear: integer("ended_year"),
+    tributePolicy: text("tribute_policy").$type<TributePolicy>().notNull(),
+    autonomy: doublePrecision("autonomy").notNull(),
+    militaryObligation: doublePrecision("military_obligation").notNull(),
+    diplomaticStatus: text("diplomatic_status").$type<VassalRelationship["diplomaticStatus"]>().notNull(),
+    endReason: text("end_reason").$type<VassalRelationship["endReason"]>(),
+    totalTribute: doublePrecision("total_tribute").notNull().default(0),
+    lastTribute: doublePrecision("last_tribute").notNull().default(0),
+    causeEventId: text("cause_event_id"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("vassal_world_vassal_idx").on(t.worldId, t.vassalCivilizationId),
+    index("vassal_world_overlord_idx").on(t.worldId, t.overlordCivilizationId),
+  ],
+);
+
+/** Explicit occupations of settlements (occupation is not annexation). */
+export const occupations = pgTable(
+  "occupations",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    occupyingCivilizationId: text("occupying_civilization_id").notNull(),
+    occupiedCivilizationId: text("occupied_civilization_id"),
+    occupiedSettlementId: text("occupied_settlement_id"),
+    occupiedTerritory: jsonb("occupied_territory").$type<TerritoryReference>().notNull(),
+    startedAtTick: integer("started_at_tick").notNull(),
+    startedYear: integer("started_year").notNull(),
+    endedAtTick: integer("ended_at_tick"),
+    endedYear: integer("ended_year"),
+    occupationPolicy: text("occupation_policy").$type<OccupationPolicy>().notNull(),
+    resistance: doublePrecision("resistance").notNull(),
+    control: doublePrecision("control").notNull(),
+    status: text("status").$type<Occupation["status"]>().notNull(),
+    upkeepPaid: doublePrecision("upkeep_paid").notNull().default(0),
+    extracted: doublePrecision("extracted").notNull().default(0),
+    causeEventId: text("cause_event_id"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    index("occupations_world_settlement_idx").on(t.worldId, t.occupiedSettlementId),
+    index("occupations_world_occupier_idx").on(t.worldId, t.occupyingCivilizationId),
+  ],
+);
+
+/**
+ * Identities born from fusions inside one world. Generated, never historical. The unique index
+ * on the source set makes a duplicate fusion impossible even if the engine tried.
+ */
+export const compositeIdentities = pgTable(
+  "composite_identities",
+  {
+    worldId: worldRef(),
+    id: text("id").notNull(),
+    seq: integer("seq").notNull(),
+    sourceIdentityIds: jsonb("source_identity_ids").$type<string[]>().notNull(),
+    sourceCivilizationIds: jsonb("source_civilization_ids").$type<string[]>().notNull(),
+    memberKey: text("member_key").notNull(),
+    displayName: text("display_name").notNull(),
+    singularNoun: text("singular_noun").notNull(),
+    adjective: text("adjective").notNull(),
+    adjectiveFeminine: text("adjective_feminine").notNull(),
+    collectiveName: text("collective_name").notNull(),
+    namingProfile: jsonb("naming_profile").$type<CompositeIdentity["namingProfile"]>().notNull(),
+    visualProfile: jsonb("visual_profile").$type<CompositeIdentity["visualProfile"]>().notNull(),
+    culturalProfile: jsonb("cultural_profile").$type<EmergentCultureProfile>().notNull(),
+    createdAtTick: integer("created_at_tick").notNull(),
+    createdYear: integer("created_year").notNull(),
+    origin: text("origin").$type<"fusion">().notNull(),
+    status: text("status").$type<CompositeIdentity["status"]>().notNull(),
+    civilizationId: text("civilization_id").notNull(),
+    causeEventId: text("cause_event_id"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.worldId, t.id] }),
+    uniqueIndex("composite_world_members_idx").on(t.worldId, t.memberKey),
+  ],
+);
+
 export const simulationLocks = pgTable("simulation_locks", {
   worldId: uuid("world_id")
     .primaryKey()
@@ -529,7 +639,51 @@ export const simulationRuns = pgTable(
   (t) => [index("simulation_runs_world_idx").on(t.worldId, t.createdAt)],
 );
 
+/**
+ * One deletion of one world. Deliberately WITHOUT a foreign key to `worlds`: the job outlives the
+ * world row, so the client (and the logs) can still read "completed" after the purge.
+ * At most one open job per world (partial unique index); the lease makes a slice exclusive.
+ */
+export const worldDeletionJobs = pgTable(
+  "world_deletion_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    worldId: uuid("world_id").notNull(),
+    worldName: text("world_name").notNull(),
+    status: text("status", { enum: ["queued", "running", "completed", "failed", "cancelled"] })
+      .notNull()
+      .default("queued"),
+    currentPhase: text("current_phase"),
+    deletedRows: integer("deleted_rows").notNull().default(0),
+    deletedByTable: jsonb("deleted_by_table").$type<Record<string, number>>().notNull().default({}),
+    /** Child tables already emptied, in deletion order. */
+    completedTables: jsonb("completed_tables").$type<string[]>().notNull().default([]),
+    progress: doublePrecision("progress").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    leaseToken: uuid("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    requestedBy: text("requested_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("world_deletion_jobs_open_idx")
+      .on(t.worldId)
+      .where(sql`${t.status} in ('queued', 'running', 'failed')`),
+    index("world_deletion_jobs_world_idx").on(t.worldId, t.createdAt),
+    index("world_deletion_jobs_status_idx").on(t.status, t.updatedAt),
+  ],
+);
+
+export type VassalRow = typeof vassalRelationships.$inferSelect;
+export type OccupationRow = typeof occupations.$inferSelect;
+export type CompositeRow = typeof compositeIdentities.$inferSelect;
 export type WorldRow = typeof worlds.$inferSelect;
+export type WorldDeletionJobRow = typeof worldDeletionJobs.$inferSelect;
 export type TribeRow = typeof tribes.$inferSelect;
 export type CivilizationRow = typeof civilizations.$inferSelect;
 export type DynastyRow = typeof dynasties.$inferSelect;

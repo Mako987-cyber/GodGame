@@ -1,7 +1,11 @@
+import { articled, np } from "../language/italian";
 import {
   IDENTITY_CATALOG_VERSION,
+  UNIFORM_START,
   historicalIdentitySchema,
   type HistoricalIdentityDefinition,
+  type IdentityLanguageProfile,
+  type NamingProfile,
 } from "./definition";
 
 /**
@@ -18,7 +22,12 @@ import {
  */
 const V = IDENTITY_CATALOG_VERSION;
 
-const RAW_CATALOG: HistoricalIdentityDefinition[] = [
+/** Catalog entry as written below; grammar and the uniform start are completed by `complete`. */
+type RawIdentity = Omit<HistoricalIdentityDefinition, "language" | "uniformStart"> & {
+  language?: Partial<IdentityLanguageProfile>;
+};
+
+const RAW_CATALOG: RawIdentity[] = [
   {
     key: "egyptian",
     displayName: "Egizi",
@@ -984,13 +993,586 @@ const RAW_CATALOG: HistoricalIdentityDefinition[] = [
       "“Vichinghi” indicava un'attività, non un popolo: qui si usa “Norreni”. Nessun bonus alle incursioni: lo stereotipo del predone non è un tratto del modello.",
     sources: [{ work: "Encyclopaedia Britannica", entry: "Viking" }],
     dataVersion: V,
+  }, // --- Età moderna -----------------------------------------------------------------------
+  // Identities of the modern age are cultural and visual starting points, NOT formed modern
+  // states: they begin exactly like everyone else (stone tools, a camp, a clan), receive no
+  // modern technology, government or city, and carry no behavioural modifier (national
+  // stereotypes are not a game mechanic).
+  {
+    key: "french",
+    displayName: "Francesi",
+    shortName: "Francesi",
+    aliases: ["French", "Francia", "France"],
+    broadCategory: "early_modern",
+    continent: "europe",
+    periodLabel: "Età moderna",
+    geographicAssociations: ["Europa occidentale", "Bacino della Senna", "Valle del Rodano"],
+    visualProfile: {
+      primaryColor: "#3b5bdb",
+      secondaryColor: "#f4e9d8",
+      emblemKey: "feather",
+      architecture: "pietra chiara, tetti in ardesia ripidi, cortili chiusi",
+    },
+    namingProfile: {
+      starts: ["jo", "ma", "lu", "re", "ga", "be", "cla", "an", "mi", "ro", "phi", "eti"],
+      middles: ["li", "ra", "ne", "ber", "vi", "ti"],
+      middleChance: 0.3,
+      ends: ["ard", "ien", "el", "ot", "on", "and", "ais"],
+      feminineEnds: ["ine", "ette", "elle", "ie", "ise"],
+      placeEnds: ["ville", "court", "mont", "ac", "ay", "ers"],
+      placePrefixes: ["Mont-"],
+      placeSuffixes: [],
+      reservedNames: [
+        "Napoleone",
+        "Napoléon",
+        "Carlomagno",
+        "Charlemagne",
+        "Clodoveo",
+        "Parigi",
+        "Paris",
+        "Lione",
+        "Lyon",
+        "Marsiglia",
+        "Marseille",
+        "Versailles",
+      ],
+    },
+    culturalTags: ["continental", "riverine", "courtly"],
+    behavioralModifiers: [],
+    description:
+      "Popolo dell'Europa occidentale, di lingua romanza, la cui storia moderna comprende una monarchia fortemente accentrata, l'Illuminismo e la Rivoluzione del 1789.",
+    representationNotes:
+      "Identità dell'età moderna usata come sandbox culturale: i Francesi di Genesis non sono uno stato moderno già formato. Partono come un clan con utensili di pietra; nomi, colori e sonorità sono l'unico richiamo.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "France" }],
+    dataVersion: V,
+  },
+  {
+    key: "english",
+    displayName: "Inglesi",
+    shortName: "Inglesi",
+    aliases: ["English", "Inghilterra", "England"],
+    broadCategory: "early_modern",
+    continent: "europe",
+    periodLabel: "Età moderna",
+    geographicAssociations: ["Gran Bretagna meridionale", "Bacino del Tamigi"],
+    visualProfile: {
+      primaryColor: "#6b4226",
+      secondaryColor: "#e8e1d0",
+      emblemKey: "shield",
+      architecture: "mattoni e travi a vista, tetti di paglia o tegole, siepi",
+    },
+    namingProfile: {
+      starts: ["ed", "al", "wil", "har", "tho", "ro", "ge", "mar", "ja", "el", "ber", "os"],
+      middles: ["win", "ric", "wal", "ley", "ton", "mund"],
+      middleChance: 0.3,
+      ends: ["ric", "ward", "win", "ton", "ley", "son"],
+      feminineEnds: ["a", "wyn", "ith", "el", "ne"],
+      placeEnds: ["ton", "ham", "ford", "bury", "wick", "by"],
+      placePrefixes: [],
+      placeSuffixes: [],
+      reservedNames: [
+        "Londra",
+        "London",
+        "York",
+        "Oxford",
+        "Elizabeth",
+        "Elisabetta",
+        "Victoria",
+        "Vittoria",
+        "Henry",
+        "Enrico",
+        "Richard",
+        "Riccardo",
+        "William",
+        "Guglielmo",
+      ],
+    },
+    culturalTags: ["insular", "maritime", "parliamentary_potential"],
+    behavioralModifiers: [],
+    description:
+      "Popolo della Gran Bretagna meridionale, di lingua germanica occidentale, la cui storia moderna comprende l'evoluzione parlamentare, l'espansione marittima e la rivoluzione industriale.",
+    representationNotes:
+      "Identità dell'età moderna usata come sandbox: niente flotta, parlamento o industria iniziali. Gli Inglesi di Genesis partono come un clan qualsiasi, anche lontano da qualsiasi isola.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "England" }],
+    dataVersion: V,
+  },
+  {
+    key: "spanish",
+    displayName: "Spagnoli",
+    shortName: "Spagnoli",
+    aliases: ["Spanish", "Spagna", "España"],
+    broadCategory: "early_modern",
+    continent: "europe",
+    periodLabel: "Età moderna",
+    geographicAssociations: ["Penisola iberica", "Meseta centrale"],
+    visualProfile: {
+      primaryColor: "#a0522d",
+      secondaryColor: "#f1c40f",
+      emblemKey: "tower",
+      architecture: "muri intonacati, patii interni, archi e tetti in coppi",
+    },
+    namingProfile: {
+      starts: ["al", "fer", "ro", "di", "ma", "car", "jo", "is", "pe", "lu", "san", "go"],
+      middles: ["dri", "ni", "ra", "ce", "li", "go"],
+      middleChance: 0.35,
+      ends: ["o", "ez", "as", "an", "el", "ino"],
+      feminineEnds: ["a", "ia", "ita", "ela", "ina"],
+      placeEnds: ["osa", "eda", "illa", "ares", "ejo", "ena"],
+      placePrefixes: ["Villa "],
+      placeSuffixes: [],
+      reservedNames: [
+        "Madrid",
+        "Toledo",
+        "Siviglia",
+        "Sevilla",
+        "Granada",
+        "Isabel",
+        "Isabella",
+        "Fernando",
+        "Ferdinando",
+        "Felipe",
+        "Filippo",
+        "Cid",
+      ],
+    },
+    culturalTags: ["peninsular", "upland", "seafaring_potential"],
+    behavioralModifiers: [],
+    description:
+      "Popolo della Penisola iberica, di lingua romanza, la cui storia moderna comprende l'unificazione dei regni iberici e un vasto impero transoceanico.",
+    representationNotes:
+      "Identità dell'età moderna usata come sandbox: nessun impero, nessuna nave, nessuna capitale predefinita. Gli Spagnoli di Genesis scrivono una storia completamente nuova.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Spain" }],
+    dataVersion: V,
+  },
+  {
+    key: "portuguese",
+    displayName: "Portoghesi",
+    shortName: "Portoghesi",
+    aliases: ["Portuguese", "Portogallo", "Portugal"],
+    broadCategory: "early_modern",
+    continent: "europe",
+    periodLabel: "Età moderna",
+    geographicAssociations: ["Costa atlantica iberica", "Valle del Tago"],
+    visualProfile: {
+      primaryColor: "#2d6a4f",
+      secondaryColor: "#e9c46a",
+      emblemKey: "ship",
+      architecture: "facciate bianche, azulejos, tetti rossi digradanti",
+    },
+    namingProfile: {
+      starts: ["jo", "ma", "ped", "ro", "al", "fer", "ines", "lu", "ber", "vas", "gon", "tel"],
+      middles: ["ri", "ça", "lo", "de", "va", "ne"],
+      middleChance: 0.3,
+      ends: ["ão", "o", "es", "inho", "al", "eu"],
+      feminineEnds: ["a", "inha", "ia", "ela"],
+      placeEnds: ["eira", "ança", "ela", "ado", "al", "ões"],
+      placePrefixes: ["Vila "],
+      placeSuffixes: [],
+      reservedNames: [
+        "Lisbona",
+        "Lisboa",
+        "Porto",
+        "Coimbra",
+        "Braga",
+        "Manuel",
+        "Henrique",
+        "Vasco",
+        "Magalhães",
+        "Magellano",
+        "Afonso",
+      ],
+    },
+    culturalTags: ["atlantic", "maritime", "exploratory"],
+    behavioralModifiers: [],
+    description:
+      "Popolo della costa atlantica della Penisola iberica, di lingua romanza, la cui storia moderna comprende le grandi navigazioni oceaniche e una rete di scali commerciali.",
+    representationNotes:
+      "Identità dell'età moderna usata come sandbox: nessuna caravella e nessuna costa garantita. I Portoghesi di Genesis partono dal clan e dalla pietra come tutti.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Portugal" }],
+    dataVersion: V,
+  },
+  {
+    key: "italian",
+    displayName: "Italiani",
+    shortName: "Italiani",
+    aliases: ["Italians", "Italia", "Italy"],
+    broadCategory: "modern",
+    continent: "europe",
+    periodLabel: "Età contemporanea",
+    geographicAssociations: ["Penisola italiana", "Pianura Padana"],
+    visualProfile: {
+      primaryColor: "#8a9a5b",
+      secondaryColor: "#f2e8cf",
+      emblemKey: "landmark",
+      architecture: "borghi in pietra, piazze porticate, tetti in coppi",
+    },
+    namingProfile: {
+      starts: ["gio", "ma", "lu", "an", "fra", "ste", "ro", "al", "vi", "ca", "be", "pa"],
+      middles: ["ri", "ta", "ni", "ce", "lo", "ven"],
+      middleChance: 0.35,
+      ends: ["o", "io", "ino", "ello", "ano", "one"],
+      feminineEnds: ["a", "ia", "ina", "ella", "etta"],
+      placeEnds: ["ano", "ello", "ona", "ino", "ate", "ara"],
+      placePrefixes: ["San "],
+      placeSuffixes: [],
+      reservedNames: [
+        "Roma",
+        "Milano",
+        "Firenze",
+        "Venezia",
+        "Napoli",
+        "Torino",
+        "Genova",
+        "Garibaldi",
+        "Cavour",
+        "Mazzini",
+        "Dante",
+        "Vittorio Emanuele",
+      ],
+    },
+    culturalTags: ["peninsular", "civic", "artistic"],
+    behavioralModifiers: [],
+    description:
+      "Popolo della penisola italiana, di lingua romanza, la cui storia comprende i comuni medievali, il Rinascimento e l'unificazione politica del XIX secolo.",
+    representationNotes:
+      "Identità dell'età contemporanea usata come sandbox: gli Italiani di Genesis non sono lo stato unitario né eredi automatici dei Romani. Partono con utensili di pietra, un accampamento e un clan.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Italy" }],
+    dataVersion: V,
+  },
+  {
+    key: "german",
+    displayName: "Tedeschi",
+    shortName: "Tedeschi",
+    aliases: ["Germans", "Germania", "Deutschland"],
+    broadCategory: "modern",
+    continent: "europe",
+    periodLabel: "Età contemporanea",
+    geographicAssociations: ["Europa centrale", "Valle del Reno"],
+    visualProfile: {
+      primaryColor: "#3d405b",
+      secondaryColor: "#e0c068",
+      emblemKey: "tree",
+      architecture: "case a graticcio, tetti spioventi, mercati coperti",
+    },
+    namingProfile: {
+      starts: ["hein", "fried", "wil", "got", "kon", "ger", "her", "ul", "sieg", "lud", "al", "ot"],
+      middles: ["ri", "hel", "bert", "mar", "wig", "ger"],
+      middleChance: 0.3,
+      ends: ["rich", "helm", "bert", "mar", "olf", "hard"],
+      feminineEnds: ["a", "run", "trud", "hild", "ine"],
+      placeEnds: ["burg", "dorf", "heim", "feld", "stadt", "hof"],
+      placePrefixes: ["Neu-"],
+      placeSuffixes: [],
+      reservedNames: [
+        "Berlino",
+        "Berlin",
+        "Monaco",
+        "München",
+        "Amburgo",
+        "Hamburg",
+        "Colonia",
+        "Köln",
+        "Friedrich",
+        "Federico",
+        "Wilhelm",
+        "Bismarck",
+        "Otto",
+      ],
+    },
+    culturalTags: ["continental", "forest", "federal_potential"],
+    behavioralModifiers: [],
+    description:
+      "Popolo dell'Europa centrale, di lingua germanica, la cui storia comprende un lungo mosaico di principati, la Riforma e l'unificazione politica del 1871.",
+    representationNotes:
+      "Identità dell'età contemporanea usata come sandbox: nessuna industria né stato unitario iniziale. I Tedeschi di Genesis partono come un clan qualsiasi.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Germany" }],
+    dataVersion: V,
+  },
+  {
+    key: "russian",
+    displayName: "Russi",
+    shortName: "Russi",
+    aliases: ["Russians", "Russia", "Rus'"],
+    broadCategory: "modern",
+    continent: "europe",
+    periodLabel: "Età moderna e contemporanea",
+    geographicAssociations: ["Pianura sarmatica", "Bacino del Volga"],
+    visualProfile: {
+      primaryColor: "#6d597a",
+      secondaryColor: "#f2cc8f",
+      emblemKey: "star",
+      architecture: "legno intagliato, tetti a bulbo, stufe centrali",
+    },
+    namingProfile: {
+      starts: ["vla", "dmi", "iv", "bor", "mi", "ni", "ser", "ale", "ol", "ya", "ko", "sta"],
+      middles: ["di", "mi", "ko", "sla", "li", "ro"],
+      middleChance: 0.35,
+      ends: ["ov", "in", "ei", "slav", "an", "ich"],
+      feminineEnds: ["a", "ina", "ova", "ya", "ka"],
+      placeEnds: ["grad", "ovo", "sk", "ino", "evo", "gorsk"],
+      placePrefixes: ["Novo-"],
+      placeSuffixes: [],
+      reservedNames: [
+        "Mosca",
+        "Moskva",
+        "Kiev",
+        "Kyiv",
+        "Novgorod",
+        "Pietroburgo",
+        "Ivan",
+        "Pyotr",
+        "Pietro",
+        "Ekaterina",
+        "Caterina",
+        "Rurik",
+        "Vladimir",
+      ],
+    },
+    culturalTags: ["continental", "steppe", "boreal"],
+    behavioralModifiers: [],
+    description:
+      "Popolo dell'Europa orientale, di lingua slava orientale, la cui storia moderna comprende l'espansione di uno stato continentale dall'Europa al Pacifico.",
+    representationNotes:
+      "Identità dell'età moderna e contemporanea usata come sandbox: nessun territorio continentale, nessuno zar, nessuna capitale predefinita. I Russi di Genesis partono dal clan.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Russia" }],
+    dataVersion: V,
+  },
+  {
+    key: "ottoman",
+    displayName: "Ottomani",
+    shortName: "Ottomani",
+    aliases: ["Ottomans", "Impero ottomano", "Osmanli"],
+    broadCategory: "early_modern",
+    continent: "asia",
+    periodLabel: "Età moderna",
+    geographicAssociations: ["Anatolia", "Stretti del Bosforo e dei Dardanelli"],
+    visualProfile: {
+      primaryColor: "#c9184a",
+      secondaryColor: "#2a9d8f",
+      emblemKey: "moon",
+      architecture: "cupole su pianta centrale, portici, fontane e cortili",
+    },
+    namingProfile: {
+      starts: ["meh", "mu", "se", "bay", "or", "ah", "sul", "ka", "ha", "o", "e", "ne"],
+      middles: ["li", "me", "ra", "yi", "ha", "su"],
+      middleChance: 0.35,
+      ends: ["met", "an", "im", "ed", "er", "in"],
+      feminineEnds: ["e", "a", "iye", "ay", "han"],
+      placeEnds: ["kent", "abad", "hisar", "köy", "li", "ova"],
+      placePrefixes: [],
+      placeSuffixes: [],
+      reservedNames: [
+        "Istanbul",
+        "Costantinopoli",
+        "Bursa",
+        "Edirne",
+        "Osman",
+        "Orhan",
+        "Mehmed",
+        "Maometto",
+        "Süleyman",
+        "Solimano",
+        "Selim",
+        "Bayezid",
+      ],
+    },
+    culturalTags: ["crossroads", "pluralist", "architectural"],
+    behavioralModifiers: [],
+    description:
+      "Stato dinastico e società multietnica nata in Anatolia, di lingua turca ottomana a corte, che per oltre sei secoli governò territori fra Europa sudorientale, Asia occidentale e Nord Africa.",
+    representationNotes:
+      "Identità dell'età moderna usata come sandbox: “Ottomani” indicava una dinastia e il suo stato multietnico più che un popolo. Nessun sultanato, esercito o capitale iniziale: tutto emerge dal mondo.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Ottoman Empire" }],
+    dataVersion: V,
+  },
+  {
+    key: "ethiopian",
+    displayName: "Etiopi",
+    shortName: "Etiopi",
+    aliases: ["Ethiopians", "Etiopia", "Abissini"],
+    broadCategory: "modern",
+    continent: "africa",
+    periodLabel: "Età moderna e contemporanea",
+    geographicAssociations: ["Altopiano etiopico", "Corno d'Africa"],
+    visualProfile: {
+      primaryColor: "#6a994e",
+      secondaryColor: "#f4d35e",
+      emblemKey: "mountain",
+      architecture: "case circolari in pietra e paglia, chiese scavate nella roccia",
+    },
+    namingProfile: {
+      starts: ["te", "ha", "ma", "ze", "ab", "gi", "se", "ta", "me", "ya", "wo", "ke"],
+      middles: ["kle", "we", "ri", "la", "ma", "ye"],
+      middleChance: 0.35,
+      ends: ["u", "e", "ay", "os", "at", "ie"],
+      feminineEnds: ["e", "it", "ayit", "wa", "nesh"],
+      placeEnds: ["ra", "ba", "ele", "ar", "ata", "ssa"],
+      placePrefixes: ["Debre "],
+      placeSuffixes: [],
+      reservedNames: [
+        "Axum",
+        "Aksum",
+        "Gondar",
+        "Lalibela",
+        "Addis Abeba",
+        "Menelik",
+        "Haile",
+        "Selassie",
+        "Tewodros",
+        "Yohannes",
+        "Ezana",
+      ],
+    },
+    culturalTags: ["highland", "agrarian_potential", "monastic"],
+    behavioralModifiers: [],
+    description:
+      "Popoli dell'altopiano del Corno d'Africa, in maggioranza di lingue semitiche e cuscitiche, la cui storia comprende un antico regno cristiano e uno stato che mantenne l'indipendenza in età contemporanea.",
+    representationNotes:
+      "Identità usata come sandbox culturale: gli Etiopi di Genesis non ricevono altopiani, chiese o dinastie storiche. Partono con utensili di pietra come ogni altro popolo.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "Ethiopia" }],
+    dataVersion: V,
+  },
+  {
+    key: "american",
+    displayName: "Statunitensi",
+    shortName: "Statunitensi",
+    aliases: ["Americans", "Stati Uniti", "United States"],
+    broadCategory: "modern",
+    continent: "americas",
+    periodLabel: "Età contemporanea",
+    geographicAssociations: ["America settentrionale", "Costa atlantica nordamericana"],
+    visualProfile: {
+      primaryColor: "#1d3557",
+      secondaryColor: "#e63946",
+      emblemKey: "bird",
+      architecture: "case in legno a doghe, verande, piante a griglia",
+    },
+    namingProfile: {
+      starts: ["ja", "wil", "ge", "be", "tho", "ab", "ma", "ha", "el", "ro", "jo", "ca"],
+      middles: ["son", "ri", "lin", "de", "ton", "mer"],
+      middleChance: 0.3,
+      ends: ["son", "ton", "ley", "er", "ard", "en"],
+      feminineEnds: ["a", "ie", "lyn", "ette", "ine"],
+      placeEnds: ["ville", "ton", "field", "port", "burg", "dale"],
+      placePrefixes: ["New "],
+      placeSuffixes: [],
+      reservedNames: [
+        "Washington",
+        "Lincoln",
+        "Jefferson",
+        "Franklin",
+        "Boston",
+        "Filadelfia",
+        "Philadelphia",
+        "New York",
+        "Chicago",
+      ],
+    },
+    culturalTags: ["continental", "frontier", "federal_potential"],
+    behavioralModifiers: [],
+    description:
+      "Popolazione degli Stati Uniti d'America, stato federale nato nel 1776 da colonie britanniche e formato da ondate migratorie di origini molto diverse.",
+    representationNotes:
+      "Identità dell'età contemporanea marcata come tale: non uno stato moderno già formato. Nessuna costituzione, frontiera o tecnologia iniziale; nessun legame con le identità indigene del catalogo. Si parte dal clan.",
+    sources: [{ work: "Encyclopaedia Britannica", entry: "United States" }],
+    dataVersion: V,
   },
 ];
 
+/**
+ * Italian grammar of each people: [singular noun, masculine adjective, feminine adjective].
+ * The plural is the display name; the collective name ("gli Egizi") is derived with the
+ * article rules of `language/italian.ts`, so it can never disagree with the templates.
+ */
+const GRAMMAR: Record<string, [string, string, string]> = {
+  egyptian: ["Egizio", "egizio", "egizia"],
+  sumerian: ["Sumero", "sumero", "sumera"],
+  babylonian: ["Babilonese", "babilonese", "babilonese"],
+  assyrian: ["Assiro", "assiro", "assira"],
+  persian: ["Persiano", "persiano", "persiana"],
+  phoenician: ["Fenicio", "fenicio", "fenicia"],
+  greek: ["Greco", "greco", "greca"],
+  roman: ["Romano", "romano", "romana"],
+  carthaginian: ["Cartaginese", "cartaginese", "cartaginese"],
+  celtic: ["Celta", "celtico", "celtica"],
+  nubian: ["Nubiano", "nubiano", "nubiana"],
+  chinese: ["Cinese", "cinese", "cinese"],
+  indian: ["Indiano", "indiano", "indiana"],
+  minoan: ["Minoico", "minoico", "minoica"],
+  maya: ["Maya", "maya", "maya"],
+  mexica: ["Mexica", "mexica", "mexica"],
+  inca: ["Inca", "inca", "inca"],
+  japanese: ["Giapponese", "giapponese", "giapponese"],
+  korean: ["Coreano", "coreano", "coreana"],
+  norse: ["Norreno", "norreno", "norrena"],
+  french: ["Francese", "francese", "francese"],
+  english: ["Inglese", "inglese", "inglese"],
+  spanish: ["Spagnolo", "spagnolo", "spagnola"],
+  portuguese: ["Portoghese", "portoghese", "portoghese"],
+  italian: ["Italiano", "italiano", "italiana"],
+  german: ["Tedesco", "tedesco", "tedesca"],
+  russian: ["Russo", "russo", "russa"],
+  ottoman: ["Ottomano", "ottomano", "ottomana"],
+  ethiopian: ["Etiope", "etiope", "etiope"],
+  american: ["Statunitense", "statunitense", "statunitense"],
+};
+
+/** State names: after the capital ("Regno di Naru") or after the people ("Lega Romana"). */
+export const DEFAULT_POLITICAL_NAME_PATTERNS = ["{form} di {capital}", "{form} {adjective}"] as const;
+/** Short titles precede the name ("re Menka"); descriptive ones follow it ("Menka, guida del clan"). */
+export const DEFAULT_LEADER_TITLE_PATTERNS = ["{title} {name}", "{name}, {title}"] as const;
+
+/** Place-name shapes, derived from the phonetic profile so existing names never change. */
+export function settlementPatternsOf(naming: NamingProfile): string[] {
+  return [
+    "{stem}",
+    ...naming.placePrefixes.map((p) => (p.endsWith("-") ? `${p}{stem}` : `${p} {stem}`)),
+    ...naming.placeSuffixes.map((sfx) => `{stem}${sfx}`),
+  ];
+}
+
+function complete(raw: RawIdentity): HistoricalIdentityDefinition {
+  const grammar = GRAMMAR[raw.key];
+  if (!grammar) throw new Error(`Identità ${raw.key} senza profilo grammaticale`);
+  const [singular, adjective, adjectiveFeminine] = grammar;
+  return {
+    ...raw,
+    language: {
+      singularNoun: singular,
+      pluralNoun: raw.displayName,
+      adjective,
+      adjectiveFeminine,
+      collectiveName: articled(np(raw.displayName, "m", "pl")),
+      articleGender: "masculine",
+      politicalNamePatterns: [...DEFAULT_POLITICAL_NAME_PATTERNS],
+      leaderTitlePatterns: [...DEFAULT_LEADER_TITLE_PATTERNS],
+      settlementNamePatterns: settlementPatternsOf(raw.namingProfile),
+      ...raw.language,
+    },
+    uniformStart: {
+      defaultGovernment: UNIFORM_START.defaultGovernment,
+      startingTechnologies: [...UNIFORM_START.startingTechnologies],
+      startingInfrastructure: [...UNIFORM_START.startingInfrastructure],
+      startingPopulationRange: [...UNIFORM_START.startingPopulationRange],
+    },
+  };
+}
+
 /** Validated, frozen catalog. A malformed entry fails at import time, never at runtime. */
 export const HISTORICAL_IDENTITIES: readonly HistoricalIdentityDefinition[] = Object.freeze(
-  RAW_CATALOG.map((identity) => Object.freeze(historicalIdentitySchema.parse(identity))),
+  RAW_CATALOG.map((identity) => Object.freeze(historicalIdentitySchema.parse(complete(identity)))),
 );
+
+/** Era groups of the catalog filters: "moderne" covers the early modern and the modern age. */
+export const IDENTITY_ERA_GROUPS = {
+  ancient: ["ancient"],
+  classical: ["classical"],
+  medieval: ["medieval"],
+  modern: ["early_modern", "modern"],
+  indigenous: ["indigenous"],
+  regional: ["regional"],
+} as const satisfies Record<string, readonly HistoricalIdentityDefinition["broadCategory"][]>;
+export type IdentityEraGroup = keyof typeof IDENTITY_ERA_GROUPS;
 
 export const IDENTITY_BY_KEY: ReadonlyMap<string, HistoricalIdentityDefinition> = new Map(
   HISTORICAL_IDENTITIES.map((identity) => [identity.key, identity]),

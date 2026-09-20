@@ -20,6 +20,7 @@ import {
 import { useWorldUi } from "@/lib/client/store";
 import { IdentityEmblem } from "./identity-emblem";
 import { TribeIdentitySection } from "./identity-section";
+import { TribePoliticsSection } from "./political-bonds";
 import { EntityLink, Facts, Meter, StockList, SubHeading, TraitList } from "./stat-bits";
 
 export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDetail }) {
@@ -168,6 +169,7 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           </ul>
         </>
       )}
+      <TribePoliticsSection tribe={tribe} detail={detail} />
       <SubHeading>Relazioni</SubHeading>
       {relations.length === 0 ? (
         <p className="text-muted text-sm">Nessun contatto con altri gruppi.</p>

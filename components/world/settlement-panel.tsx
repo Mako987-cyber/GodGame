@@ -16,6 +16,7 @@ import {
   STATUS_LABELS,
 } from "@/lib/client/format";
 import { useWorldUi } from "@/lib/client/store";
+import { SettlementOccupationNote } from "./political-bonds";
 import { EntityLink, Facts, Meter, StockList, SubHeading } from "./stat-bits";
 
 const CONSTRUCTION_STATUS: Record<string, string> = {
@@ -51,6 +52,7 @@ export function SettlementPanel({
           {s.epidemic && <Badge tone="war">{CRISIS_LABELS.epidemic}</Badge>}
         </div>
       </div>
+      <SettlementOccupationNote settlement={s} detail={detail} />
       <Facts
         items={[
           ["Popolazione", fmtInt(s.population)],

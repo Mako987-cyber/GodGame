@@ -11,7 +11,10 @@ import {
   CATEGORY_LABELS,
   competitivePreset,
   CONTINENT_LABELS,
+  ERA_FILTERS,
+  eraOf,
   filterIdentities,
+  MODERN_IDENTITY_NOTICE,
   ROSTER_LIMITS,
   ROSTER_MODE_LABELS,
   type RosterFormState,
@@ -56,7 +59,8 @@ function IdentityPreview({ identity }: { identity: IdentitySummaryDTO }) {
         <div>
           <p className="font-serif text-lg leading-tight">{identity.displayName}</p>
           <p className="text-muted text-xs">
-            {identity.periodLabel} · {identity.geographicAssociations.join(", ")}
+            {CATEGORY_LABELS[identity.broadCategory] ?? identity.periodLabel} · {identity.periodLabel} ·{" "}
+            {identity.geographicAssociations.join(", ")}
           </p>
         </div>
         <span className="ml-auto flex gap-1" aria-label="Palette">
@@ -65,6 +69,9 @@ function IdentityPreview({ identity }: { identity: IdentitySummaryDTO }) {
         </span>
       </div>
       <p className="text-sm">{identity.description}</p>
+      {eraOf(identity.broadCategory) === "modern" && (
+        <p className="text-ochre text-xs">{MODERN_IDENTITY_NOTICE}</p>
+      )}
       <p className="text-muted text-xs">
         Nota storica statica. Nel mondo generato questo popolo parte come tutti gli altri: utensili di pietra,
         governo di clan, nessun territorio o leader storico.
@@ -89,12 +96,12 @@ export function RosterPicker({
     staleTime: Infinity,
   });
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("");
+  const [era, setEra] = useState("");
   const [continent, setContinent] = useState("");
   const [focused, setFocused] = useState<string | null>(null);
   const items = useMemo(
-    () => filterIdentities(catalog.data?.items ?? [], { search, category, continent }),
-    [catalog.data, search, category, continent],
+    () => filterIdentities(catalog.data?.items ?? [], { search, category: "", continent, era }),
+    [catalog.data, search, era, continent],
   );
   const preview =
     catalog.data?.items.find((i) => i.key === focused) ??
@@ -163,7 +170,26 @@ export function RosterPicker({
       {picking && (
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
           <div className="grid content-start gap-2">
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+            <div role="group" aria-label="Filtra per epoca" className="flex flex-wrap gap-1">
+              {ERA_FILTERS.map((f) => {
+                const n = (catalog.data?.items ?? []).filter(
+                  (i) => !f.key || eraOf(i.broadCategory) === f.key,
+                ).length;
+                return (
+                  <Button
+                    key={f.key || "all"}
+                    size="sm"
+                    variant={era === f.key ? "primary" : "secondary"}
+                    aria-pressed={era === f.key}
+                    disabled={n === 0}
+                    onClick={() => setEra(f.key)}
+                  >
+                    {f.label} <span className="text-muted">({n})</span>
+                  </Button>
+                );
+              })}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
               <div className="relative">
                 <Search className="text-muted pointer-events-none absolute top-3 left-3 size-4" aria-hidden />
                 <Input
@@ -174,14 +200,6 @@ export function RosterPicker({
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              <Select aria-label="Periodo" value={category} onChange={(e) => setCategory(e.target.value)}>
-                <option value="">Tutti i periodi</option>
-                {Object.entries(CATEGORY_LABELS).map(([k, label]) => (
-                  <option key={k} value={k}>
-                    {label}
-                  </option>
-                ))}
-              </Select>
               <Select
                 aria-label="Continente"
                 value={continent}
@@ -228,6 +246,11 @@ export function RosterPicker({
                           size="sm"
                         />
                         <span className="min-w-0 flex-1 truncate">{identity.displayName}</span>
+                        {eraOf(identity.broadCategory) === "modern" && (
+                          <span className="border-line text-muted rounded border px-1 text-[10px] uppercase">
+                            moderna
+                          </span>
+                        )}
                         <span className="text-muted truncate text-xs">
                           {CONTINENT_LABELS[identity.continent]}
                         </span>

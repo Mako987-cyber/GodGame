@@ -8,6 +8,7 @@ import type {
   GovernmentType,
   IdentityType,
   JsonValue,
+  PlacementReport,
   RosterEntry,
   RosterMode,
   Season,
@@ -38,10 +39,13 @@ export interface WorldListItem {
   height: number;
   currentTick: number;
   currentYear: number;
-  status: "paused" | "running";
+  /** `deleting`: confirmed deletion in progress (list page only; every other read answers 404). */
+  status: "paused" | "running" | "deleting";
   summary: WorldSummary;
   createdAt: string;
   updatedAt: string;
+  /** Present while the world is being deleted. */
+  deletion?: { jobId: string; status: string; progress: number } | null;
 }
 
 /** Column-oriented map layers: one entry per cell, row-major (index = y * width + x). */
@@ -171,6 +175,8 @@ export interface RosterDTO {
   balancedPlacement: boolean;
   equalStartingLevel: boolean;
   entries: RosterEntry[];
+  /** Band and tier used to place the founding peoples; null for worlds created before the audit. */
+  placement: PlacementReport | null;
 }
 
 export interface CivilizationHistoryDTO {
@@ -309,6 +315,60 @@ export interface WorldDetail {
   roster: RosterDTO | null;
   /** Summaries of the identities used in this world only. */
   identities: IdentitySummaryDTO[];
+  /** Explicit vassal relationships, active and ended (ids of political instances, "t12"). */
+  vassalages: VassalageDTO[];
+  /** Occupations of settlements, active and ended. */
+  occupations: OccupationDTO[];
+  /** Identities born from fusions in this world: generated, never historical. */
+  composites: CompositeIdentityDTO[];
+}
+
+export interface VassalageDTO {
+  id: string;
+  overlordCivilizationId: string;
+  vassalCivilizationId: string;
+  startedYear: number;
+  endedYear: number | null;
+  tributePolicy: "light" | "standard" | "heavy";
+  autonomy: number;
+  militaryObligation: number;
+  diplomaticStatus: "active" | "rebellion" | "ended";
+  endReason: string | null;
+  totalTribute: number;
+  lastTribute: number;
+}
+
+export interface OccupationDTO {
+  id: string;
+  occupyingCivilizationId: string;
+  occupiedCivilizationId: string | null;
+  occupiedSettlementId: string | null;
+  startedYear: number;
+  endedYear: number | null;
+  occupationPolicy: "military" | "administrative" | "extractive" | "integrative";
+  resistance: number;
+  control: number;
+  status: string;
+  upkeepPaid: number;
+  extracted: number;
+}
+
+export interface CompositeIdentityDTO {
+  id: string;
+  displayName: string;
+  collectiveName: string;
+  adjective: string;
+  sourceIdentityIds: string[];
+  /** Display names of the sources (catalog identities or earlier composites). */
+  sourceNames: string[];
+  sourceCivilizationIds: string[];
+  civilizationId: string;
+  primaryColor: string;
+  secondaryColor: string;
+  emblemKey: string;
+  createdYear: number;
+  status: string;
+  tags: string[];
 }
 
 export interface EventDTO {
@@ -414,5 +474,6 @@ export interface SimulateResponse {
 }
 
 export interface ApiErrorBody {
-  error: { code: string; message: string; details?: unknown };
+  /** `requestId` correlates the answer with the server logs (never a stack trace). */
+  error: { code: string; message: string; details?: unknown; requestId?: string };
 }

@@ -3,7 +3,8 @@ import { clamp } from "../grid";
 import { deriveRng } from "../prng";
 import type { CultureTraits } from "../types";
 import { HISTORICAL_IDENTITIES, IDENTITY_BY_KEY } from "./catalog";
-import type { HistoricalIdentityDefinition } from "./definition";
+import type { PlacementReport } from "../placement";
+import { UNIFORM_START, type HistoricalIdentityDefinition } from "./definition";
 
 /**
  * Common starting state of every people in a historical world. Identities never alter it:
@@ -13,9 +14,9 @@ import type { HistoricalIdentityDefinition } from "./definition";
  * is founded by the engine when the band settles, exactly as for procedural tribes.
  */
 export const STARTING_CIVILIZATION_STATE = {
-  technologies: ["stone_tools"],
-  buildings: ["camp"],
-  government: "clan",
+  technologies: UNIFORM_START.startingTechnologies,
+  buildings: UNIFORM_START.startingInfrastructure,
+  government: UNIFORM_START.defaultGovernment,
   settlementLevel: "camp",
   militaryLevel: "primitive",
   literacy: 0,
@@ -126,12 +127,23 @@ export interface RosterEntry {
   initialLeaderName: string | null;
   /** Name of the first encampment (the band's home before any settlement). */
   homeName: string;
+  /**
+   * Placement audit (absent in worlds created before it existed). `placementFallback` is true
+   * when the start was not placed in the preferred band of the map: the UI warns about it.
+   */
+  placementFallback?: boolean;
+  fertility?: number;
+  resources?: number;
+  climatePenalty?: number;
+  nearestStartDistance?: number;
 }
 
 export interface WorldRoster {
   config: CivilizationRosterConfig;
   catalogVersion: string;
   entries: RosterEntry[];
+  /** Band and tier actually used to place the founding peoples (absent in older worlds). */
+  placement?: PlacementReport;
 }
 
 /**

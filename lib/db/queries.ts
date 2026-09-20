@@ -31,6 +31,7 @@ import {
 } from "drizzle-orm";
 import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { Database } from "./index";
+import { boundedTransaction } from "./tx";
 import * as m from "./mappers";
 import * as s from "./schema";
 
@@ -112,7 +113,7 @@ export async function insertWorld(
   input: { id: string; name: string; state: WorldState },
 ): Promise<s.WorldRow> {
   const { id: worldId, name, state } = input;
-  return db.transaction(async (tx) => {
+  return boundedTransaction(db, async (tx) => {
     await seedTechnologyCatalog(tx);
     const [row] = await tx
       .insert(s.worlds)
@@ -181,22 +182,45 @@ export async function insertWorld(
   });
 }
 
+/**
+ * The world, unless it does not exist or is being deleted: a tombstoned world is invisible to
+ * every read and write path (simulate, detail, events, stats...). Deletion uses `getWorldRowAnyStatus`.
+ */
 export async function getWorldRow(db: Database, worldId: string): Promise<s.WorldRow | null> {
+  const [row] = await db
+    .select()
+    .from(s.worlds)
+    .where(and(eq(s.worlds.id, worldId), ne(s.worlds.status, "deleting")))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getWorldRowAnyStatus(db: Database, worldId: string): Promise<s.WorldRow | null> {
   const [row] = await db.select().from(s.worlds).where(eq(s.worlds.id, worldId)).limit(1);
   return row ?? null;
 }
 
+/** Worlds for the list page, including the ones being deleted (shown with their progress). */
 export async function listWorldRows(db: Database, limit = 50): Promise<s.WorldRow[]> {
   return db.select().from(s.worlds).orderBy(desc(s.worlds.updatedAt)).limit(limit);
 }
 
+/** Pause/resume. Never touches a world being deleted: it cannot be brought back to life. */
 export async function updateWorldStatus(db: Database, worldId: string, status: "paused" | "running") {
   const [row] = await db
     .update(s.worlds)
     .set({ status, updatedAt: new Date() })
-    .where(eq(s.worlds.id, worldId))
+    .where(and(eq(s.worlds.id, worldId), ne(s.worlds.status, "deleting")))
     .returning();
   return row ?? null;
+}
+
+/** The world was deleted (or tombstoned) while a simulation batch was running. */
+export class WorldDeletedError extends Error {
+  constructor() {
+    super("world deleted during the simulation batch");
+    this.name = "WorldDeletedError";
+  }
 }
 
 export interface LoadedWorld {
@@ -209,37 +233,55 @@ export interface LoadedWorld {
 export async function loadWorldState(db: Database, worldId: string): Promise<LoadedWorld | null> {
   const row = await getWorldRow(db, worldId);
   if (!row) return null;
-  const [cells, people, tribes, settlements, civilizations, households, relationships, dynasties] =
-    await Promise.all([
-      db
-        .select()
-        .from(s.worldCells)
-        .where(eq(s.worldCells.worldId, worldId))
-        .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
-      db
-        .select()
-        .from(s.people)
-        .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
-        .orderBy(asc(s.people.seq)),
-      db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
-      db
-        .select()
-        .from(s.settlements)
-        .where(eq(s.settlements.worldId, worldId))
-        .orderBy(asc(s.settlements.seq)),
-      db
-        .select()
-        .from(s.civilizations)
-        .where(eq(s.civilizations.worldId, worldId))
-        .orderBy(asc(s.civilizations.seq)),
-      db
-        .select()
-        .from(s.households)
-        .where(and(eq(s.households.worldId, worldId), isNull(s.households.dissolvedYear)))
-        .orderBy(asc(s.households.seq)),
-      db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
-      db.select().from(s.dynasties).where(eq(s.dynasties.worldId, worldId)).orderBy(asc(s.dynasties.seq)),
-    ]);
+  const [
+    cells,
+    people,
+    tribes,
+    settlements,
+    civilizations,
+    households,
+    relationships,
+    dynasties,
+    vassalages,
+    occupations,
+    composites,
+  ] = await Promise.all([
+    db
+      .select()
+      .from(s.worldCells)
+      .where(eq(s.worldCells.worldId, worldId))
+      .orderBy(asc(s.worldCells.y), asc(s.worldCells.x)),
+    db
+      .select()
+      .from(s.people)
+      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
+      .orderBy(asc(s.people.seq)),
+    db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
+    db.select().from(s.settlements).where(eq(s.settlements.worldId, worldId)).orderBy(asc(s.settlements.seq)),
+    db
+      .select()
+      .from(s.civilizations)
+      .where(eq(s.civilizations.worldId, worldId))
+      .orderBy(asc(s.civilizations.seq)),
+    db
+      .select()
+      .from(s.households)
+      .where(and(eq(s.households.worldId, worldId), isNull(s.households.dissolvedYear)))
+      .orderBy(asc(s.households.seq)),
+    db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
+    db.select().from(s.dynasties).where(eq(s.dynasties.worldId, worldId)).orderBy(asc(s.dynasties.seq)),
+    db
+      .select()
+      .from(s.vassalRelationships)
+      .where(eq(s.vassalRelationships.worldId, worldId))
+      .orderBy(asc(s.vassalRelationships.seq)),
+    db.select().from(s.occupations).where(eq(s.occupations.worldId, worldId)).orderBy(asc(s.occupations.seq)),
+    db
+      .select()
+      .from(s.compositeIdentities)
+      .where(eq(s.compositeIdentities.worldId, worldId))
+      .orderBy(asc(s.compositeIdentities.seq)),
+  ]);
   // `migrateState` fills everything a world created by an older engine version is missing.
   const state: WorldState = normalizeState(
     migrateState({
@@ -265,6 +307,9 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       crises: row.crises ?? [],
       archive: { people: [], households: [] },
       roster: row.roster ?? null,
+      vassalages: vassalages.map(m.vassalFromRow),
+      occupations: occupations.map(m.occupationFromRow),
+      composites: composites.map(m.compositeFromRow),
     }),
   );
   return { row, state, cellSignatures: state.cells.map(m.cellSignature) };
@@ -281,6 +326,15 @@ export async function persistSimulation(
 ): Promise<s.WorldSummary> {
   const { row, state } = loaded;
   const worldId = row.id;
+
+  // Serialises with a deletion: whichever locks the world row first wins. A world tombstoned
+  // while this batch was computing is not written to (the batch is discarded, the purge goes on).
+  const [current] = await tx
+    .select({ status: s.worlds.status })
+    .from(s.worlds)
+    .where(eq(s.worlds.id, worldId))
+    .for("update");
+  if (!current || current.status === "deleting") throw new WorldDeletedError();
 
   const changedCells = state.cells.filter((c, i) => m.cellSignature(c) !== loaded.cellSignatures[i]);
   await bulkUpsert(
@@ -341,6 +395,28 @@ export async function persistSimulation(
     s.dynasties,
     state.dynasties.map((d) => m.dynastyToRow(worldId, d)),
     [s.dynasties.worldId, s.dynasties.id],
+    ["worldId", "id"],
+  );
+
+  await bulkUpsert(
+    tx,
+    s.vassalRelationships,
+    state.vassalages.map((v) => m.vassalToRow(worldId, v)),
+    [s.vassalRelationships.worldId, s.vassalRelationships.id],
+    ["worldId", "id"],
+  );
+  await bulkUpsert(
+    tx,
+    s.occupations,
+    state.occupations.map((o) => m.occupationToRow(worldId, o)),
+    [s.occupations.worldId, s.occupations.id],
+    ["worldId", "id"],
+  );
+  await bulkUpsert(
+    tx,
+    s.compositeIdentities,
+    state.composites.map((c) => m.compositeToRow(worldId, c)),
+    [s.compositeIdentities.worldId, s.compositeIdentities.id],
     ["worldId", "id"],
   );
 
@@ -516,6 +592,9 @@ export async function getWorldEntities(db: Database, worldId: string) {
     notable,
     techRows,
     dynasties,
+    vassalages,
+    occupations,
+    composites,
   ] = await Promise.all([
     db
       .select()
@@ -556,8 +635,22 @@ export async function getWorldEntities(db: Database, worldId: string) {
       .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true), eq(s.people.notable, true))),
     db.select().from(s.worldTechnologies).where(eq(s.worldTechnologies.worldId, worldId)),
     db.select().from(s.dynasties).where(eq(s.dynasties.worldId, worldId)).orderBy(asc(s.dynasties.seq)),
+    db
+      .select()
+      .from(s.vassalRelationships)
+      .where(eq(s.vassalRelationships.worldId, worldId))
+      .orderBy(asc(s.vassalRelationships.seq)),
+    db.select().from(s.occupations).where(eq(s.occupations.worldId, worldId)).orderBy(asc(s.occupations.seq)),
+    db
+      .select()
+      .from(s.compositeIdentities)
+      .where(eq(s.compositeIdentities.worldId, worldId))
+      .orderBy(asc(s.compositeIdentities.seq)),
   ]);
   return {
+    vassalages,
+    occupations,
+    composites,
     cells,
     tribes,
     settlements,
@@ -714,32 +807,64 @@ export async function listRunningWorldIds(db: Database, limit: number): Promise<
  * peoples (no N+1): tribes, states, head counts, current leaders and the world row.
  */
 export async function getPoliticalInstances(db: Database, worldId: string) {
-  const [row, tribes, civilizations, populations, leaders] = await Promise.all([
-    getWorldRow(db, worldId),
-    db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
-    db
-      .select()
-      .from(s.civilizations)
-      .where(eq(s.civilizations.worldId, worldId))
-      .orderBy(asc(s.civilizations.seq)),
-    db
-      .select({ tribeId: s.people.tribeId, population: count() })
-      .from(s.people)
-      .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
-      .groupBy(s.people.tribeId),
-    db
-      .select({
-        id: s.people.id,
-        name: s.people.name,
-        age: s.people.age,
-        sex: s.people.sex,
-        tribeId: s.people.tribeId,
-      })
-      .from(s.people)
-      .innerJoin(s.tribes, and(eq(s.tribes.worldId, s.people.worldId), eq(s.tribes.leaderId, s.people.id)))
-      .where(eq(s.people.worldId, worldId)),
-  ]);
-  return { row, tribes, civilizations, populations, leaders };
+  const [row, tribes, civilizations, populations, leaders, vassalages, occupations, settlements, composites] =
+    await Promise.all([
+      getWorldRow(db, worldId),
+      db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
+      db
+        .select()
+        .from(s.civilizations)
+        .where(eq(s.civilizations.worldId, worldId))
+        .orderBy(asc(s.civilizations.seq)),
+      db
+        .select({ tribeId: s.people.tribeId, population: count() })
+        .from(s.people)
+        .where(and(eq(s.people.worldId, worldId), eq(s.people.alive, true)))
+        .groupBy(s.people.tribeId),
+      db
+        .select({
+          id: s.people.id,
+          name: s.people.name,
+          age: s.people.age,
+          sex: s.people.sex,
+          tribeId: s.people.tribeId,
+        })
+        .from(s.people)
+        .innerJoin(s.tribes, and(eq(s.tribes.worldId, s.people.worldId), eq(s.tribes.leaderId, s.people.id)))
+        .where(eq(s.people.worldId, worldId)),
+      db
+        .select()
+        .from(s.vassalRelationships)
+        .where(
+          and(
+            eq(s.vassalRelationships.worldId, worldId),
+            ne(s.vassalRelationships.diplomaticStatus, "ended"),
+          ),
+        ),
+      db
+        .select()
+        .from(s.occupations)
+        .where(and(eq(s.occupations.worldId, worldId), eq(s.occupations.status, "active"))),
+      db
+        .select({ id: s.settlements.id, tribeId: s.settlements.tribeId })
+        .from(s.settlements)
+        .where(and(eq(s.settlements.worldId, worldId), eq(s.settlements.status, "active"))),
+      db
+        .select({ id: s.compositeIdentities.id, visualProfile: s.compositeIdentities.visualProfile })
+        .from(s.compositeIdentities)
+        .where(eq(s.compositeIdentities.worldId, worldId)),
+    ]);
+  return {
+    row,
+    tribes,
+    civilizations,
+    populations,
+    leaders,
+    vassalages,
+    occupations,
+    settlements,
+    composites,
+  };
 }
 
 /** Founding facts of one people: its first settlement and its technologies, in discovery order. */

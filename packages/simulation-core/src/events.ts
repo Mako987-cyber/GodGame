@@ -38,6 +38,9 @@ export const EVENT_TYPE_LABELS: Record<EventType, string> = {
   culture: "Cultura",
   settlement_growth: "Crescita urbana",
   civilization_transformed: "Trasformazione politica",
+  vassalage: "Vassallaggio",
+  occupation: "Occupazione",
+  fusion: "Fusione di popoli",
 };
 
 export const IMPORTANCE_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {

@@ -340,6 +340,11 @@ export interface Civilization {
   politicalStem: string | null;
   /** Previous political names, oldest first: the state changed form, it was not replaced. */
   formerNames: string[];
+  /**
+   * Pattern of the political name chosen at foundation ("{form} di {capital}",
+   * "{form} {adjective}"), re-rendered when the government changes. Null: legacy name rule.
+   */
+  namePattern: string | null;
 }
 
 export interface Household {
@@ -352,7 +357,18 @@ export interface Household {
 }
 
 export type DiplomaticStatus =
-  "unknown" | "contact" | "neutral" | "trade_partner" | "allied" | "rival" | "war" | "truce";
+  | "unknown"
+  | "contact"
+  | "neutral"
+  | "trade_partner"
+  | "allied"
+  | "rival"
+  | "war"
+  | "truce"
+  /** An active vassal relationship binds the pair (see `VassalRelationship`). */
+  | "vassalage"
+  /** One side occupies settlements of the other, without being at war (see `Occupation`). */
+  | "occupation";
 
 /** Escalation ladder walked before an actual war breaks out. */
 export type ConflictPhase = "peace" | "tension" | "demand" | "threat" | "raid" | "war" | "truce";
@@ -384,9 +400,14 @@ export interface Relationship {
   lastConflictYear: number | null;
   /** Years the pair has spent in the current phase. */
   phaseYears: number;
+  /** Accumulated years of conditions favouring a fusion of the two peoples (see fusion.ts). */
+  fusionYears: number;
 }
 
 export type EventType =
+  | "vassalage"
+  | "occupation"
+  | "fusion"
   | "birth"
   | "notable_death"
   | "famine"
@@ -518,6 +539,118 @@ export interface Counters {
   dynasty: number;
   construction: number;
   crisis: number;
+  vassalage: number;
+  occupation: number;
+  composite: number;
+}
+
+// --- Explicit political relations ------------------------------------------------------------
+//
+// "Civilization" in these records means the political instance of a people, i.e. a `Tribe`
+// (ids "t12"): the same ids the API exposes under /worlds/:id/civilizations/:civilizationId.
+
+export type TributePolicy = "light" | "standard" | "heavy";
+
+/**
+ * A people bound to another: it keeps its identity, capital, culture and leader, pays tribute,
+ * sends a levy to its overlord's wars, and may rebel or become independent. Never deleted:
+ * an ended relationship stays in the record with its end year and reason.
+ */
+export interface VassalRelationship {
+  id: string;
+  seq: number;
+  overlordCivilizationId: string;
+  vassalCivilizationId: string;
+  startedAtTick: number;
+  startedYear: number;
+  endedAtTick: number | null;
+  endedYear: number | null;
+  tributePolicy: TributePolicy;
+  /** Autonomy of the vassal, 0..1: lowers tribute; at the top it becomes independence. */
+  autonomy: number;
+  /** Share of the vassal's fighters sent to the overlord's battles, 0..1. */
+  militaryObligation: number;
+  diplomaticStatus: "active" | "rebellion" | "ended";
+  endReason: "independence" | "rebellion_won" | "extinct" | "merged" | null;
+  /** Food delivered to the overlord since the start. */
+  totalTribute: number;
+  lastTribute: number;
+  causeEventId: string | null;
+}
+
+export type OccupationPolicy = "military" | "administrative" | "extractive" | "integrative";
+
+export interface TerritoryReference {
+  settlementId: string | null;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/**
+ * A settlement held by force. Occupation is not annexation: the settlement keeps its owner and
+ * its people their identity; the occupier pays for the garrison, extracts according to its
+ * policy and faces resistance. It ends in annexation, liberation, autonomy or abandonment.
+ */
+export interface Occupation {
+  id: string;
+  seq: number;
+  occupyingCivilizationId: string;
+  occupiedCivilizationId: string | null;
+  occupiedSettlementId: string | null;
+  occupiedTerritory: TerritoryReference;
+  startedAtTick: number;
+  startedYear: number;
+  endedAtTick: number | null;
+  endedYear: number | null;
+  occupationPolicy: OccupationPolicy;
+  /** 0..1 */
+  resistance: number;
+  /** 0..1 */
+  control: number;
+  status: "active" | "annexed" | "liberated" | "autonomous" | "returned" | "abandoned";
+  /** Food paid by the occupier for the garrison since the start. */
+  upkeepPaid: number;
+  /** Food and goods taken from the occupied settlement since the start. */
+  extracted: number;
+  causeEventId: string | null;
+}
+
+/** Culture that emerged from a fusion: blended traits and the union of the sources' tags. */
+export interface EmergentCultureProfile {
+  traits: CultureTraits;
+  tags: string[];
+}
+
+/**
+ * A new identity produced by the engine when peoples of different identities fuse. It is NOT a
+ * real historical civilization: its name is generated ("Romano-Celti", "Lega Romano-Celtica")
+ * and it keeps references to every source identity and political instance, which are never
+ * erased from the world.
+ */
+export interface CompositeIdentity {
+  id: string;
+  seq: number;
+  /** Catalog keys (or ids of earlier composites) that fused, largest first. */
+  sourceIdentityIds: string[];
+  sourceCivilizationIds: string[];
+  /** Canonical key of the source set: two fusions of the same set never coexist in a world. */
+  memberKey: string;
+  displayName: string;
+  singularNoun: string;
+  adjective: string;
+  adjectiveFeminine: string;
+  collectiveName: string;
+  namingProfile: import("./identity/definition").NamingProfile;
+  visualProfile: import("./identity/definition").VisualProfile;
+  culturalProfile: EmergentCultureProfile;
+  createdAtTick: number;
+  createdYear: number;
+  origin: "fusion";
+  status: "active" | "fragmented" | "absorbed" | "dissolved";
+  /** The political instance born from the fusion. */
+  civilizationId: string;
+  causeEventId: string | null;
 }
 
 export interface TickStats {
@@ -602,6 +735,10 @@ export interface WorldState {
   archive: Archive;
   /** Founding roster of a historical world; `null` for procedural and legacy worlds. Never regenerated. */
   roster: WorldRoster | null;
+  /** Explicit political relations and fusions (empty in worlds created before they existed). */
+  vassalages: VassalRelationship[];
+  occupations: Occupation[];
+  composites: CompositeIdentity[];
 }
 
 export interface SimulationResult {

@@ -2,6 +2,7 @@ import { HOUSING } from "./constants";
 import type { Community, SimContext } from "./context";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { clamp, distance, round } from "./grid";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { killPerson } from "./population";
 import type { ActiveCrisis, Settlement } from "./types";
 
@@ -264,8 +265,19 @@ export function tryRevolt(ctx: SimContext, community: Community): boolean {
     actors: settlement ? [actor.settlement(settlement), actor.tribe(tribe)] : [actor.tribe(tribe)],
     x: community.x,
     y: community.y,
-    title: `Rivolta ${settlement ? `a ${settlement.name}` : `tra i ${tribe.name}`}`,
-    description: `Dopo ${config.unrestYearsBeforeRevolt} anni di malcontento, la popolazione ${settlement ? `di ${settlement.name}` : `dei ${tribe.name}`} si è ribellata${causes.length ? `: all'origine ${causes.join(", ")}` : ""}. ${pluralPeople(victims)} hanno perso la vita presso ${describePlace(ctx.state, community.x, community.y)}.`,
+    title: settlement
+      ? `Rivolta a ${settlement.name}`
+      : t("Rivolta presso {art:people}", { people: peoplePhrase(tribe) }),
+    description: t(
+      "Dopo {years} anni di malcontento, la popolazione {whose} si è ribellata{causes}. {victims} hanno perso la vita presso {place}.",
+      {
+        years: config.unrestYearsBeforeRevolt,
+        whose: settlement ? `di ${settlement.name}` : t("{di:people}", { people: peoplePhrase(tribe) }),
+        causes: causes.length ? `: all'origine ${causes.join(", ")}` : "",
+        victims: pluralPeople(victims),
+        place: describePlace(ctx.state, community.x, community.y),
+      },
+    ),
     metadata: {
       tribeId: tribe.id,
       settlementId: settlement?.id ?? null,

@@ -1,6 +1,7 @@
 import {
   getIdentity,
   HISTORICAL_IDENTITIES,
+  IDENTITY_ERA_GROUPS,
   IDENTITY_CATALOG_VERSION,
   politicalTitle,
   STARTING_CIVILIZATION_STATE,
@@ -50,6 +51,7 @@ export function listIdentitiesService(query: IdentityListQuery): IdentityPageDTO
   const matches = SUMMARIES.filter(
     (s) =>
       (!query.category || s.broadCategory === query.category) &&
+      (!query.era || (IDENTITY_ERA_GROUPS[query.era] as readonly string[]).includes(s.broadCategory)) &&
       (!query.continent || s.continent === query.continent) &&
       (!term ||
         [s.key, s.displayName, ...s.aliases, ...s.geographicAssociations].some((v) =>
@@ -88,7 +90,12 @@ export function getIdentityService(key: string): IdentityDetailDTO {
 type Instances = Awaited<ReturnType<typeof getPoliticalInstances>>;
 
 function buildCivilizations(data: Instances): WorldCivilizationDTO[] {
-  const { row, tribes, civilizations, populations, leaders } = data;
+  const { row, tribes, civilizations, populations, leaders, vassalages, occupations, settlements } = data;
+  const compositeEmblem = new Map(data.composites.map((c) => [c.id, c.visualProfile.emblemKey]));
+  const vassals = new Set(vassalages.map((v) => v.vassalCivilizationId));
+  const occupiedSettlements = new Set(occupations.map((o) => o.occupiedSettlementId));
+  const composites = new Set(tribes.filter((t) => t.identityType === "composite").map((t) => t.id));
+  const ownSettlements = (id: string) => settlements.filter((s) => s.tribeId === id);
   const population = new Map(populations.map((p) => [p.tribeId, p.population]));
   const leaderById = new Map(leaders.map((l) => [l.id, l]));
   const civById = new Map(civilizations.map((c) => [c.id, c]));
@@ -102,21 +109,29 @@ function buildCivilizations(data: Instances): WorldCivilizationDTO[] {
     const government = (t.government ?? "clan") as GovernmentType;
     const leader = t.leaderId ? leaderById.get(t.leaderId) : undefined;
     const civ = t.civilizationId ? civById.get(t.civilizationId) : undefined;
+    const own = ownSettlements(t.id);
     const status: WorldCivilizationDTO["status"] =
       t.status === "extinct"
         ? t.absorbedByTribeId
-          ? "absorbed"
+          ? composites.has(t.absorbedByTribeId)
+            ? "merged"
+            : "absorbed"
           : "dissolved"
-        : t.parentTribeId
-          ? "successor"
-          : "active";
+        : vassals.has(t.id)
+          ? "vassal"
+          : own.length > 0 && own.every((s) => occupiedSettlements.has(s.id))
+            ? "occupied"
+            : t.parentTribeId
+              ? "successor"
+              : "active";
     return {
       id: t.id,
       displayName: t.name,
       color: t.color,
       identityId: t.identityId,
       identityType: t.identityType,
-      emblemKey: getIdentity(t.identityId)?.visualProfile.emblemKey ?? null,
+      emblemKey:
+        getIdentity(t.identityId)?.visualProfile.emblemKey ?? compositeEmblem.get(t.identityId ?? "") ?? null,
       status,
       lifecycle: t.status,
       foundedYear: t.foundedYear,
@@ -181,6 +196,10 @@ export async function getWorldCivilizationService(
           homeName: entry.homeName,
           startQuality: entry.startQuality,
           startWater: entry.startWater,
+          placementFallback: entry.placementFallback ?? null,
+          fertility: entry.fertility ?? null,
+          resources: entry.resources ?? null,
+          climatePenalty: entry.climatePenalty ?? null,
         }
       : null,
     firstSettlement:

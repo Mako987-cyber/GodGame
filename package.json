@@ -21,7 +21,9 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "sim:run": "tsx scripts/run-simulation.ts",
+    "diagnose:world-delete": "tsx scripts/diagnose-world-delete.ts",
     "test:simulation": "vitest run --config vitest.stress.config.ts",
+    "test:world-delete": "vitest run tests/world-deletion.test.ts tests/world-deletion.pg.test.ts",
     "test:all": "npm run test && npm run test:simulation"
   },
   "dependencies": {

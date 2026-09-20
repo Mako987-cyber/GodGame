@@ -7,6 +7,7 @@ import { fmtYear, GOVERNMENT_LABELS } from "@/lib/client/format";
 import {
   CIV_STATUS_LABELS,
   IDENTITY_DISCLAIMER,
+  PLACEMENT_SIZE_LABELS,
   IDENTITY_TYPE_LABELS,
   TECH_METHOD_LABELS,
 } from "@/lib/client/identity";
@@ -41,6 +42,9 @@ export function TribeIdentitySection({ tribe, detail }: { tribe: TribeDTO; detai
   const startingTechName = startingTech
     ? (detail.technologies.find((t) => t.id === startingTech.techId)?.name ?? startingTech.techId)
     : null;
+
+  const composite = detail.composites.find((c) => c.id === tribe.identityId);
+  if (composite) return <CompositeIdentitySection tribe={tribe} detail={detail} compositeId={composite.id} />;
 
   if (!identity) {
     return (
@@ -84,10 +88,44 @@ export function TribeIdentitySection({ tribe, detail }: { tribe: TribeDTO; detai
           ["Tecnologia iniziale", startingTechName ?? (parent ? "Ereditata" : "—")],
           ["Primo insediamento", civ.data?.firstSettlement?.name ?? (civ.isPending ? "…" : "Non ancora")],
           ["Governo attuale", GOVERNMENT_LABELS[tribe.government] ?? tribe.government],
+          ...(entry
+            ? ([
+                [
+                  "Qualità della partenza",
+                  `${Math.round(entry.startQuality * 100)}%${entry.startWater ? " · acqua vicina" : " · senza acqua vicina"}`,
+                ],
+                ...(entry.fertility !== undefined
+                  ? ([
+                      [
+                        "Fertilità · risorse · clima",
+                        `${Math.round(entry.fertility * 100)}% · ${Math.round((entry.resources ?? 0) * 100)}% · ${
+                          (entry.climatePenalty ?? 0) > 0.15 ? "rigido" : "mite"
+                        }`,
+                      ],
+                    ] as [string, string][])
+                  : []),
+              ] as [string, string][])
+            : []),
           ["Storia reale applicata", "No"],
           ["Identità storica come ispirazione", "Sì"],
         ]}
       />
+      {entry?.placementFallback && (
+        <p
+          role="note"
+          className="border-ochre/40 bg-ochre/10 text-ochre mt-2 rounded-md border px-2 py-1 text-xs"
+        >
+          Partenza di ripiego: la mappa{" "}
+          {PLACEMENT_SIZE_LABELS[detail.roster?.placement?.band.mapSize ?? "medium"] ?? ""} non offriva
+          abbastanza posizioni nella fascia di qualità preferita
+          {detail.roster?.placement
+            ? ` (≥ ${Math.round(detail.roster.placement.band.preferredMin * 100)}%, scarto ≤ ${Math.round(
+                detail.roster.placement.band.preferredMax * 100,
+              )} punti)`
+            : ""}
+          . Questo popolo parte da una cella valida ma meno omogenea rispetto agli altri.
+        </p>
+      )}
       {absorbedBy && (
         <p className="text-muted mt-2 text-xs">
           Assorbita da:{" "}
@@ -123,6 +161,67 @@ export function TribeIdentitySection({ tribe, detail }: { tribe: TribeDTO; detai
         </p>
       )}
       <p className="text-muted mt-3 text-xs italic">{IDENTITY_DISCLAIMER}</p>
+    </section>
+  );
+}
+
+/**
+ * A people born from a fusion in this world. Its identity is generated, never historical: the
+ * section says so and lists the identities and peoples it came from.
+ */
+function CompositeIdentitySection({
+  tribe,
+  detail,
+  compositeId,
+}: {
+  tribe: TribeDTO;
+  detail: WorldDetail;
+  compositeId: string;
+}) {
+  const { select } = useWorldUi();
+  const composite = detail.composites.find((c) => c.id === compositeId)!;
+  const sources = composite.sourceCivilizationIds
+    .map((id) => detail.tribes.find((t) => t.id === id))
+    .filter((t): t is TribeDTO => t !== undefined);
+  return (
+    <section aria-label="Identità composita" className="mb-2">
+      <div className="mb-2 flex items-center gap-2">
+        <IdentityEmblem emblemKey={composite.emblemKey} color={tribe.color} />
+        <div className="min-w-0">
+          <p className="text-muted text-xs">Identità composita · generata dalla simulazione</p>
+          <p className="truncate font-serif text-lg leading-tight">{composite.displayName}</p>
+        </div>
+        <span className="ml-auto flex gap-1" aria-label="Palette">
+          <span className="size-4 rounded-sm" style={{ background: composite.primaryColor }} />
+          <span className="size-4 rounded-sm" style={{ background: composite.secondaryColor }} />
+        </span>
+      </div>
+      <Facts
+        items={[
+          ["Nata nel", fmtYear(composite.createdYear)],
+          ["Identità d'origine", composite.sourceNames.join(" + ")],
+          ["Tratti culturali", composite.tags.join(", ") || "—"],
+          ["Civiltà storica reale", "No"],
+        ]}
+      />
+      {sources.length > 0 && (
+        <p className="text-muted mt-2 text-xs">
+          Popoli d&apos;origine:{" "}
+          {sources.map((s, i) => (
+            <span key={s.id}>
+              {i > 0 && ", "}
+              <EntityLink color={s.color} onClick={() => select({ kind: "tribe", id: s.id })}>
+                {s.name}
+              </EntityLink>
+            </span>
+          ))}
+          . Restano nella cronologia come popoli confluiti nella nuova identità.
+        </p>
+      )}
+      <p className="text-muted mt-3 text-xs italic">
+        {IDENTITY_TYPE_LABELS.composite}: nome, palette e cultura sono stati generati dal motore a partire
+        dalle identità d&apos;origine. Non rappresenta un popolo storico.
+      </p>
     </section>
   );
 }

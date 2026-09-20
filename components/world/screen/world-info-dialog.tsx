@@ -3,7 +3,12 @@
 import { Dialog } from "@/components/ui/dialog";
 import type { WorldDetail } from "@/lib/dto";
 import { fmtInt, fmtYear } from "@/lib/client/format";
-import { IDENTITY_DISCLAIMER, ROSTER_MODE_LABELS } from "@/lib/client/identity";
+import {
+  IDENTITY_DISCLAIMER,
+  PLACEMENT_SIZE_LABELS,
+  PLACEMENT_TIER_LABELS,
+  ROSTER_MODE_LABELS,
+} from "@/lib/client/identity";
 import { HEX_SIZE, MAP_OFFSET_LAYOUT, MAP_ORIENTATION } from "@/lib/map-renderer";
 import { IdentityEmblem } from "../identity-emblem";
 import { WorldSummary } from "../world-summary";
@@ -47,9 +52,27 @@ export function WorldInfoDialog({
                   <span className="text-muted text-xs">
                     guida iniziale {e.initialLeaderName ?? "—"}, {fmtInt(e.population)} persone
                   </span>
+                  {e.placementFallback && (
+                    <span
+                      className="text-ochre text-xs"
+                      title="Partenza fuori dalla fascia di qualità preferita"
+                    >
+                      ⚠ ripiego
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
+            {detail.roster.placement && (
+              <p className="text-muted text-xs">
+                Posizionamento: mappa {PLACEMENT_SIZE_LABELS[detail.roster.placement.band.mapSize]},{" "}
+                {PLACEMENT_TIER_LABELS[detail.roster.placement.tier]} · qualità{" "}
+                {Math.round(detail.roster.placement.minQuality * 100)}–
+                {Math.round(detail.roster.placement.maxQuality * 100)}% · distanza minima{" "}
+                {detail.roster.placement.minDistance} celle · {detail.roster.placement.fallbackCount} partenze
+                di ripiego.
+              </p>
+            )}
             <p className="text-muted text-xs italic">{IDENTITY_DISCLAIMER}</p>
           </section>
         )}

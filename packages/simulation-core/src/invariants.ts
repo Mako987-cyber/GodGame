@@ -2,6 +2,7 @@ import { RESOURCES, getResourceAmount } from "./stock";
 import { TECH_BY_ID } from "./technology";
 import { inBounds } from "./grid";
 import { checkIdentityLineage } from "./identity/lineage";
+import { checkPoliticalInvariants } from "./politics";
 import type { HistoricalEvent, WorldState } from "./types";
 
 /**
@@ -216,6 +217,7 @@ export function checkInvariants(state: WorldState, options: InvariantOptions = {
 
   // --- Historical identities ----------------------------------------------
   for (const problem of checkIdentityLineage(state)) add(problem);
+  for (const problem of checkPoliticalInvariants(state)) add(problem);
 
   // --- Civilizations and dynasties ----------------------------------------
   for (const civ of state.civilizations) {

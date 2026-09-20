@@ -7,6 +7,9 @@ import {
   normalizeTribe,
   tierFromLevel,
   type Cell,
+  type CompositeIdentity,
+  type Occupation,
+  type VassalRelationship,
   type CivilizationStats,
   type Civilization,
   type Dynasty,
@@ -238,6 +241,7 @@ export const civilizationFromRow = (r: Select<typeof s.civilizations>): Civiliza
   identityType: r.identityType,
   politicalStem: r.politicalStem,
   formerNames: r.formerNames ?? [],
+  namePattern: r.namePattern ?? null,
 });
 
 export const relationshipToRow = (worldId: string, rel: Relationship): Insert<typeof s.relationships> => ({
@@ -268,7 +272,92 @@ export const relationshipFromRow = (r: Select<typeof s.relationships>): Relation
     phase: r.phase,
     lastConflictYear: r.lastConflictYear,
     phaseYears: r.phaseYears,
+    fusionYears: r.fusionYears ?? 0,
   } as Relationship);
+
+// --- Political relations and composite identities ---------------------------------------------
+
+export const vassalToRow = (
+  worldId: string,
+  v: VassalRelationship,
+): Insert<typeof s.vassalRelationships> => ({
+  worldId,
+  ...v,
+});
+
+export const vassalFromRow = (r: Select<typeof s.vassalRelationships>): VassalRelationship => ({
+  id: r.id,
+  seq: r.seq,
+  overlordCivilizationId: r.overlordCivilizationId,
+  vassalCivilizationId: r.vassalCivilizationId,
+  startedAtTick: r.startedAtTick,
+  startedYear: r.startedYear,
+  endedAtTick: r.endedAtTick,
+  endedYear: r.endedYear,
+  tributePolicy: r.tributePolicy,
+  autonomy: r.autonomy,
+  militaryObligation: r.militaryObligation,
+  diplomaticStatus: r.diplomaticStatus,
+  endReason: r.endReason ?? null,
+  totalTribute: r.totalTribute,
+  lastTribute: r.lastTribute,
+  causeEventId: r.causeEventId,
+});
+
+export const occupationToRow = (worldId: string, o: Occupation): Insert<typeof s.occupations> => ({
+  worldId,
+  ...o,
+});
+
+export const occupationFromRow = (r: Select<typeof s.occupations>): Occupation => ({
+  id: r.id,
+  seq: r.seq,
+  occupyingCivilizationId: r.occupyingCivilizationId,
+  occupiedCivilizationId: r.occupiedCivilizationId,
+  occupiedSettlementId: r.occupiedSettlementId,
+  occupiedTerritory: r.occupiedTerritory,
+  startedAtTick: r.startedAtTick,
+  startedYear: r.startedYear,
+  endedAtTick: r.endedAtTick,
+  endedYear: r.endedYear,
+  occupationPolicy: r.occupationPolicy,
+  resistance: r.resistance,
+  control: r.control,
+  status: r.status,
+  upkeepPaid: r.upkeepPaid,
+  extracted: r.extracted,
+  causeEventId: r.causeEventId,
+});
+
+export const compositeToRow = (
+  worldId: string,
+  c: CompositeIdentity,
+): Insert<typeof s.compositeIdentities> => ({
+  worldId,
+  ...c,
+});
+
+export const compositeFromRow = (r: Select<typeof s.compositeIdentities>): CompositeIdentity => ({
+  id: r.id,
+  seq: r.seq,
+  sourceIdentityIds: r.sourceIdentityIds,
+  sourceCivilizationIds: r.sourceCivilizationIds,
+  memberKey: r.memberKey,
+  displayName: r.displayName,
+  singularNoun: r.singularNoun,
+  adjective: r.adjective,
+  adjectiveFeminine: r.adjectiveFeminine,
+  collectiveName: r.collectiveName,
+  namingProfile: r.namingProfile,
+  visualProfile: r.visualProfile,
+  culturalProfile: r.culturalProfile,
+  createdAtTick: r.createdAtTick,
+  createdYear: r.createdYear,
+  origin: r.origin,
+  status: r.status,
+  civilizationId: r.civilizationId,
+  causeEventId: r.causeEventId,
+});
 
 export const eventToRow = (worldId: string, e: HistoricalEvent): Insert<typeof s.historicalEvents> => ({
   worldId,

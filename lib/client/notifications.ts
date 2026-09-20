@@ -30,6 +30,9 @@ const CATEGORY_BY_TYPE: Record<string, NotificationCategory> = {
   conflict: "war",
   battle: "war",
   conquest: "war",
+  occupation: "war",
+  vassalage: "peace",
+  fusion: "founding",
   peace: "peace",
   alliance: "peace",
   notable_death: "leader",
@@ -73,7 +76,13 @@ export function categoryOf(e: Pick<EventDTO, "type" | "importance">): Notificati
 
 function targetOf(e: EventDTO): Selection | null {
   const kinds = new Map(e.actors.map((a) => [a.kind, a.id]));
-  if (e.type === "conflict" || e.type === "battle" || e.type === "peace" || e.type === "conquest") {
+  if (
+    e.type === "conflict" ||
+    e.type === "battle" ||
+    e.type === "peace" ||
+    e.type === "conquest" ||
+    e.type === "vassalage"
+  ) {
     const tribes = e.actors.filter((a) => a.kind === "tribe").map((a) => a.id);
     if (tribes.length >= 2 && tribes[0] && tribes[1]) return { kind: "war", aId: tribes[0], bId: tribes[1] };
   }

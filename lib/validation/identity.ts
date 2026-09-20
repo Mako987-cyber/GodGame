@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   EMBLEM_KEYS,
+  IDENTITY_ERA_GROUPS,
   IDENTITY_CATEGORIES,
   IDENTITY_CONTINENTS,
   IDENTITY_TYPES,
@@ -16,6 +17,8 @@ export const rosterInputSchema = civilizationRosterConfigSchema;
 export const identityListQuerySchema = z.object({
   search: z.string().trim().max(60).optional(),
   category: z.enum(IDENTITY_CATEGORIES).optional(),
+  /** Era group: ancient, classical, medieval, modern (early modern + contemporary), indigenous, regional. */
+  era: z.enum(Object.keys(IDENTITY_ERA_GROUPS) as [keyof typeof IDENTITY_ERA_GROUPS]).optional(),
   continent: z.enum(IDENTITY_CONTINENTS).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(50),
@@ -78,7 +81,23 @@ export const civilizationIdSchema = z
   .trim()
   .regex(/^t\d+$/, "Civiltà non valida");
 
-export const CIVILIZATION_STATUSES = ["active", "successor", "absorbed", "dissolved"] as const;
+/**
+ * Continuity of a political instance, derived from the world:
+ * - active: independent and alive; successor: born from a split/secession of another one;
+ * - vassal: bound to an overlord (vassal_relationships); occupied: all its settlements occupied;
+ * - absorbed: ended by joining/being annexed into another people (identity lives on in it);
+ * - merged: ended in a fusion that produced a composite identity (fusion.ts);
+ * - dissolved: died out.
+ */
+export const CIVILIZATION_STATUSES = [
+  "active",
+  "successor",
+  "vassal",
+  "occupied",
+  "absorbed",
+  "merged",
+  "dissolved",
+] as const;
 
 export const worldCivilizationSchema = z.object({
   id: z.string(),
@@ -123,6 +142,11 @@ export const worldCivilizationDetailSchema = worldCivilizationSchema.extend({
       homeName: z.string(),
       startQuality: z.number(),
       startWater: z.boolean(),
+      /** Null for worlds created before the placement audit. */
+      placementFallback: z.boolean().nullable(),
+      fertility: z.number().nullable(),
+      resources: z.number().nullable(),
+      climatePenalty: z.number().nullable(),
     })
     .nullable(),
   firstSettlement: z.object({ name: z.string(), year: z.number() }).nullable(),

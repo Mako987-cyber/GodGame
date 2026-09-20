@@ -82,6 +82,30 @@ describe("catalogo via API", () => {
     expect(paged.page).toBe(2);
   });
 
+  it("filtra per epoca: «moderne» comprende età moderna e contemporanea", async () => {
+    const modern = await data<IdentityPageDTO>(
+      await listIdentities(get("http://test/api/historical-identities?era=modern")),
+    );
+    expect(modern.items.map((i) => i.key).sort()).toEqual([
+      "american",
+      "english",
+      "ethiopian",
+      "french",
+      "german",
+      "italian",
+      "ottoman",
+      "portuguese",
+      "russian",
+      "spanish",
+    ]);
+    expect(modern.items.every((i) => ["early_modern", "modern"].includes(i.broadCategory))).toBe(true);
+    const ancient = await data<IdentityPageDTO>(
+      await listIdentities(get("http://test/api/historical-identities?era=ancient")),
+    );
+    expect(ancient.items.every((i) => i.broadCategory === "ancient")).toBe(true);
+    expect((await listIdentities(get("http://test/api/historical-identities?era=futuro"))).status).toBe(400);
+  });
+
   it("il dettaglio mostra lo stato iniziale comune; chiavi ignote danno 404", async () => {
     const res = await getIdentity(get("http://test"), { params: Promise.resolve({ identityId: "roman" }) });
     const roman = await data<IdentityDetailDTO>(res);

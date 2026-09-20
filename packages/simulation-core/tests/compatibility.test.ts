@@ -166,4 +166,37 @@ describe("compatibilità con i mondi esistenti", () => {
     expect(deriveCulture("derivati", "t1")).not.toEqual(deriveCulture("derivati", "t2"));
     expect(normalizeSkills(undefined).leadership).toBeGreaterThan(0);
   });
+
+  it("un mondo creato prima di vassallaggi, occupazioni e fusioni si carica senza essere rinominato", () => {
+    const state = createWorld({ seed: "compat-v2", roster: { mode: "random-real", civilizationCount: 5 } });
+    runSimulation(state, 60);
+    const old = structuredClone(state) as unknown as Record<string, unknown>;
+    delete old.vassalages;
+    delete old.occupations;
+    delete old.composites;
+    const counters = old.counters as Record<string, unknown>;
+    delete counters.vassalage;
+    delete counters.occupation;
+    delete counters.composite;
+    for (const rel of old.relationships as Record<string, unknown>[]) delete rel.fusionYears;
+    for (const civ of old.civilizations as Record<string, unknown>[]) delete civ.namePattern;
+    delete (old.roster as Record<string, unknown>).placement;
+    old.simulationVersion = 2;
+    const names = state.tribes.map((t) => t.name);
+    const civNames = state.civilizations.map((c) => c.name);
+    const loaded = migrateState(old as unknown as WorldState);
+    expect(loaded.vassalages).toEqual([]);
+    expect(loaded.occupations).toEqual([]);
+    expect(loaded.composites).toEqual([]);
+    expect(loaded.counters).toMatchObject({ vassalage: 0, occupation: 0, composite: 0 });
+    expect(loaded.relationships.every((r) => r.fusionYears === 0)).toBe(true);
+    expect(loaded.civilizations.every((c) => c.namePattern === null)).toBe(true);
+    // No renaming, no retroactive identity: names and identities are exactly the stored ones.
+    expect(loaded.tribes.map((t) => t.name)).toEqual(names);
+    expect(loaded.civilizations.map((c) => c.name)).toEqual(civNames);
+    expect(loaded.roster?.placement).toBeUndefined();
+    expect(loaded.simulationVersion).toBe(SIMULATION_VERSION);
+    runSimulation(loaded, 20);
+    expect(checkInvariants(loaded)).toEqual([]);
+  });
 });

@@ -55,7 +55,7 @@ const TONE: Record<NotificationCategory, string> = {
 };
 
 const TYPES =
-  "settlement_founded,civilization_founded,civilization_transformed,tech_discovered,famine,conflict,battle,conquest,peace,alliance,notable_death,leadership,unrest,epidemic,settlement_collapse,tribe_extinct";
+  "settlement_founded,civilization_founded,civilization_transformed,tech_discovered,famine,conflict,battle,conquest,occupation,vassalage,fusion,peace,alliance,notable_death,leadership,unrest,epidemic,settlement_collapse,tribe_extinct";
 
 /** Notifications of the world: server events plus the ones returned by the last advance. */
 export function useNotifications(worldId: string, recent: EventDTO[]) {

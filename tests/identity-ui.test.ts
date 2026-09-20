@@ -60,7 +60,7 @@ describe("selettore del roster", () => {
       filterIdentities(catalog, { search: "nilo", category: "", continent: "" }).map((i) => i.key),
     ).toEqual(expect.arrayContaining(["egyptian", "nubian"]));
     const americas = filterIdentities(catalog, { search: "", category: "", continent: "americas" });
-    expect(americas.map((i) => i.key).sort()).toEqual(["inca", "maya", "mexica"]);
+    expect(americas.map((i) => i.key).sort()).toEqual(["american", "inca", "maya", "mexica"]);
     expect(
       filterIdentities(catalog, { search: "", category: "classical", continent: "europe" }).length,
     ).toBeGreaterThan(0);

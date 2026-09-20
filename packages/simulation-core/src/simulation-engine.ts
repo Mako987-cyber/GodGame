@@ -15,8 +15,11 @@ import { consume, foodNeed, produce, redistributeFood } from "./economy";
 import { actor, describePlace, emitEvent } from "./events";
 import { clamp, distance, round } from "./grid";
 import { assertInvariants } from "./invariants";
+import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { ensureLeader, tryCoup, updateLeaderStanding } from "./leadership";
 import { joinNearbyGroup, migrateBand, splitBand } from "./migration";
+import { updateFusions } from "./fusion";
+import { cleanupPolitics, updatePolitics } from "./politics";
 import {
   ageAndNaturalDeaths,
   births,
@@ -411,11 +414,17 @@ export function runTick(ctx: SimContext) {
 
   // 13-14. Relations: trade, knowledge, raids, wars, peace.
   computeThreat(ctx);
-  updateDiplomacy(ctx, buildProfiles(ctx));
+  const profiles = buildProfiles(ctx);
+  updateDiplomacy(ctx, profiles);
+  // 14b. Explicit political relations: occupations and vassals (politics.ts).
+  updatePolitics(ctx, profiles);
+  // 14c. Peoples bound for decades by alliance or integration may fuse (fusion.ts).
+  updateFusions(ctx, profiles);
 
   // 15-16. Crises, bookkeeping, extinction, civilizations, milestones.
   expireCrises(ctx);
   finalizeTick(ctx);
+  cleanupPolitics(ctx);
 }
 
 /** Step 12: culture drift, form of government, stability and internal unrest. */
@@ -537,8 +546,18 @@ function famineEvent(ctx: SimContext, c: Community) {
     actors: c.settlement ? [actor.settlement(c.settlement), actor.tribe(c.tribe)] : [actor.tribe(c.tribe)],
     x: c.x,
     y: c.y,
-    title: `Carestia ${c.settlement ? `a ${c.settlement.name}` : `tra i ${c.tribe.name}`}`,
-    description: `Da due anni il cibo non basta presso ${where}: la tribù ${c.tribe.name} riesce a coprire solo il ${Math.round(c.foodRatio * 100)}% del fabbisogno${causes.length ? `, complice ${causes.join(" e ")}` : ""}.`,
+    title: c.settlement
+      ? `Carestia a ${c.settlement.name}`
+      : t("Carestia presso {art:people}", { people: peoplePhrase(c.tribe) }),
+    description: t(
+      "Da due anni il cibo non basta presso {where}: {art:people} {v:people:riesce|riescono} a coprire solo il {pct}% del fabbisogno{causes}.",
+      {
+        where,
+        people: peoplePhrase(c.tribe),
+        pct: Math.round(c.foodRatio * 100),
+        causes: causes.length ? `, complice ${causes.join(" e ")}` : "",
+      },
+    ),
     metadata: {
       foodRatio: round(c.foodRatio, 2),
       population: c.members.length,
@@ -616,8 +635,11 @@ function finalizeTick(ctx: SimContext) {
         actors: [actor.tribe(tribe)],
         x: tribe.x,
         y: tribe.y,
-        title: `Scompaiono i ${tribe.name}`,
-        description: `Dell'antica tribù ${tribe.name} non resta più nessuno presso ${describePlace(state, tribe.x, tribe.y)}.`,
+        title: t("{v:people:Scompare|Scompaiono} {art:people}", { people: peoplePhrase(tribe) }),
+        description: t("{Di:people} non resta più nessuno presso {place}.", {
+          people: peoplePhrase(tribe),
+          place: describePlace(state, tribe.x, tribe.y),
+        }),
         metadata: {
           foundedYear: tribe.foundedYear,
           years: state.year - tribe.foundedYear,

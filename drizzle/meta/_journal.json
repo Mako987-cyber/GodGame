@@ -22,6 +22,27 @@
       "when": 1789818330819,
       "tag": "0002_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789831795290,
+      "tag": "0003_world_deletion_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789833613923,
+      "tag": "0004_civilization_name_pattern",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789834359385,
+      "tag": "0005_political_relations",
+      "breakpoints": true
     }
   ]
 }

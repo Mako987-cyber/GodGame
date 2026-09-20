@@ -9,6 +9,8 @@ export type ErrorCode =
   | "FORBIDDEN"
   | "CONFIRMATION_MISMATCH"
   | "WORLD_RUNNING"
+  | "WORLD_BUSY"
+  | "DELETION_FAILED"
   | "INTERNAL";
 
 const STATUS: Record<ErrorCode, number> = {
@@ -22,6 +24,9 @@ const STATUS: Record<ErrorCode, number> = {
   FORBIDDEN: 403,
   CONFIRMATION_MISMATCH: 422,
   WORLD_RUNNING: 409,
+  /** A database lock on the world could not be taken within `lock_timeout`: retry shortly. */
+  WORLD_BUSY: 409,
+  DELETION_FAILED: 500,
   INTERNAL: 500,
 };
 
