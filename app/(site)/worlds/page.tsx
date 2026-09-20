@@ -4,6 +4,7 @@ import { DatabaseError } from "@/components/world/db-error";
 import { WorldCard } from "@/components/world/world-card";
 import type { WorldListItem } from "@/lib/dto";
 import { listWorldsService } from "@/lib/services/world-service";
+import { describeError } from "@/lib/utils/errors";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Mondi" };
@@ -14,7 +15,7 @@ export default async function WorldsPage() {
   try {
     worlds = await listWorldsService();
   } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
+    error = describeError(e);
   }
   return (
     <main className="mx-auto grid max-w-[1500px] gap-6 px-4 py-10">

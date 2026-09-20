@@ -45,3 +45,22 @@ export class AppError extends Error {
 }
 
 export const notFound = (what = "Mondo") => new AppError("NOT_FOUND", `${what} non trovato`);
+
+/**
+ * Human-readable description of an error, including its `cause` chain.
+ *
+ * Drizzle wraps every driver failure in a `DrizzleQueryError` whose message is only the SQL it
+ * tried to run ("Failed query: select ..."); the reason — `relation "worlds" does not exist`,
+ * `ECONNREFUSED`, a terminated session — lives in `cause`. Reporting `error.message` alone tells
+ * the reader which query failed but never why, so the causes are appended here.
+ */
+export function describeError(error: unknown, maxDepth = 4): string {
+  if (!(error instanceof Error)) return String(error);
+  const parts: string[] = [];
+  for (let e: unknown = error, depth = 0; e instanceof Error && depth < maxDepth; depth++) {
+    const message = e.message.trim();
+    if (message && !parts.includes(message)) parts.push(message);
+    e = e.cause;
+  }
+  return parts.join(" — ") || error.name;
+}

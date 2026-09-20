@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { logger } from "@/lib/utils/logger";
 import { pgliteDirectory, requiresSsl, runtimeDatabaseUrl } from "./config";
+import { markEmbeddedDatabase } from "./driver";
 import * as schema from "./schema";
 
 /** Common base type of the postgres-js and PGlite drivers: repositories depend only on this. */
@@ -42,7 +43,7 @@ async function connectPglite(dataDir: string): Promise<Database> {
   // Local convenience: the embedded database is always migrated on first use.
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
   logger.info("db.pglite.ready", { dataDir });
-  return db as unknown as Database;
+  return markEmbeddedDatabase(db) as unknown as Database;
 }
 
 export function getDb(): Promise<Database> {
