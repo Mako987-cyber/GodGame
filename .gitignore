@@ -12,3 +12,6 @@ playwright-report
 test-results
 .env*
 !.env.example
+
+# graphify knowledge-graph output (generated locally)
+graphify-out/
