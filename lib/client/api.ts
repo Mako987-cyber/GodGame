@@ -1,5 +1,11 @@
 import type { CivilizationRosterConfigInput } from "@genesis/simulation-core";
 import type {
+  CivilizationKnowledgeDTO,
+  TechnologyHistoryDTO,
+  WorldTechnologiesDTO,
+} from "@/lib/validation/technology";
+import type { CausalityDTO } from "@/lib/services/causality-service";
+import type {
   ApiErrorBody,
   CivilizationHistoryDTO,
   EventsPage,
@@ -119,6 +125,16 @@ export const api = {
     request<CivilizationHistoryDTO>(
       `/api/worlds/${id}/civilizations/${civId}/history?page=${page}&pageSize=20`,
     ),
+  /** What one people believes about the others: estimates, never the truth. On demand. */
+  knowledge: (id: string, civId: string) =>
+    request<CivilizationKnowledgeDTO>(`/api/worlds/${id}/civilizations/${civId}/knowledge`),
+  /** Chain of causes and direct consequences of one event, resolved in the database. */
+  causality: (id: string, eventId: string) =>
+    request<CausalityDTO>(`/api/worlds/${id}/events/${eventId}/causality`),
+  /** The catalogue of one world with how many peoples actually hold each technology. */
+  worldTechnologies: (id: string) => request<WorldTechnologiesDTO>(`/api/worlds/${id}/technologies`),
+  technologyHistory: (id: string, techId: string) =>
+    request<TechnologyHistoryDTO>(`/api/worlds/${id}/technologies/${techId}/history`),
 };
 
 export const queryKeys = {
@@ -130,4 +146,8 @@ export const queryKeys = {
   identities: ["identities"] as const,
   identity: (key: string) => ["identity", key] as const,
   civilization: (id: string, civId: string) => ["civilization", id, civId] as const,
+  knowledge: (id: string, civId: string) => ["knowledge", id, civId] as const,
+  causality: (id: string, eventId: string) => ["causality", id, eventId] as const,
+  worldTechnologies: (id: string) => ["world-technologies", id] as const,
+  technologyHistory: (id: string, techId: string) => ["technology-history", id, techId] as const,
 };

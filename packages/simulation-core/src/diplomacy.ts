@@ -5,6 +5,8 @@ import type { Community, SimContext } from "./context";
 import { isUnderEpidemic } from "./crises";
 import { activeAgreements, hasAgreement, reputationOf, violateAgreement } from "./agreements";
 import { beliefDistance } from "./belief";
+import { anchor, causesFrom, releaseAnchor, warKey } from "./causality";
+import { perceivedPower } from "./knowledge";
 import { culturalDistance } from "./culture";
 import { exchangeGoods } from "./economy";
 import { actor, emitEvent } from "./events";
@@ -390,7 +392,14 @@ function decideAction(
           populationA: a.population,
           populationB: b.population,
         },
+        causeEventIds: causesFrom(state.year, [
+          [a.tribe, warKey(b.tribe.id)],
+          [b.tribe, warKey(a.tribe.id)],
+        ]),
       });
+      // The war is closed: it stops being an open cause for what comes next.
+      releaseAnchor(a.tribe, warKey(b.tribe.id));
+      releaseAnchor(b.tribe, warKey(a.tribe.id));
       // A peace dictated by a much stronger side can make the loser a vassal (politics.ts).
       // A war that was a vassal's rebellion is settled there instead.
       if (!vassalBond(state, a.tribe.id, b.tribe.id)) {
@@ -427,7 +436,8 @@ function decideAction(
     x.scarcity * 0.4 +
     x.aggression * 0.3 +
     x.crowding * 0.35 +
-    clamp(x.power / Math.max(1, y.power) - 1, 0, 1) * 0.4 +
+    // Each side weighs the other by what it BELIEVES, not by the truth (knowledge.ts).
+    clamp(x.power / Math.max(1, perceivedPower(ctx, x, y)) - 1, 0, 1) * 0.4 +
     rel.conflictMemory * 0.2 +
     (y.population < x.population * 0.6 ? 0.2 : 0) -
     rel.trust * 0.8;
@@ -435,7 +445,11 @@ function decideAction(
   // Rounded here so the thresholds below and the numbers stored in the event are the same
   // value: an event must always justify the decision that produced it.
   const warScore = round(motive(att, def), 2);
-  const advantage = round(att.power / Math.max(1, def.power), 2);
+  // The decision rests on the attacker's estimate of the defender; `realAdvantage` is kept only
+  // so the chronicle can say, afterwards, whether it misjudged.
+  const advantage = round(att.power / Math.max(1, perceivedPower(ctx, att, def)), 2);
+  const realAdvantage = round(att.power / Math.max(1, def.power), 2);
+  const misjudged = advantage > realAdvantage * 1.3;
   const target = att === a ? pair.cb : pair.ca;
   // A vassal and its overlord never escalate: their disputes become rebellions (politics.ts).
   const bound = vassalBond(state, a.tribe.id, b.tribe.id) !== undefined;
@@ -543,8 +557,9 @@ function decideAction(
     if (rel.conflictMemory > 0.2) reasons.push("da vecchi rancori");
     if (att.aggression > 0.55) reasons.push("dall'indole bellicosa");
     if (advantage > 1.5) reasons.push("dalla superiorità numerica");
+    if (misjudged) reasons.push("da una stima del nemico più ottimista del vero");
     if (rel.culturalDistance > 0.4) reasons.push("da una distanza culturale incolmabile");
-    emitEvent(ctx, {
+    const war = emitEvent(ctx, {
       type: "conflict",
       subtype: "war_declared",
       importance: 4,
@@ -567,13 +582,20 @@ function decideAction(
         defenderId: def.tribe.id,
         warScore,
         advantage,
+        realAdvantage,
+        misjudged,
         scarcity: round(att.scarcity, 2),
         crowding: round(att.crowding, 2),
         conflictMemory: rel.conflictMemory,
         culturalDistance: rel.culturalDistance,
         militarism: att.tribe.culture.militarism,
       },
+      // A war started out of hunger names the famine behind it.
+      causeEventIds: att.scarcity > 0.3 ? causesFrom(state.year, [[att.tribe, "famine", 10]]) : [],
     });
+    // Both sides remember the war, so the battles and the peace can name it as their cause.
+    anchor(att.tribe, warKey(def.tribe.id), war);
+    anchor(def.tribe, warKey(att.tribe.id), war);
     return;
   }
 
@@ -672,7 +694,12 @@ function decideAction(
         });
       }
     }
-    if (rel.trust > 0.4) {
+    // Goods carry know-how with them. Trade starts at trust 0.25 but sharing used to start at
+    // 0.4, and the proximity branch below is an alternative to trading: so two peoples trading
+    // on moderate trust passed each other LESS knowledge than neighbours who did not trade at
+    // all. Real traffic now always carries something, and more once trust is established.
+    const trusted = rel.trust > 0.4;
+    if (trusted || volume > 0) {
       const roads =
         pair.ca.settlement &&
         pair.cb.settlement &&
@@ -680,8 +707,9 @@ function decideAction(
           ? 0.03
           : 0;
       const openness = knowledgeOpenness(ctx, a.tribe, b.tribe);
-      shareKnowledge(ctx, a.tribe, b.tribe, (0.04 + roads) * openness);
-      shareKnowledge(ctx, b.tribe, a.tribe, (0.04 + roads) * openness);
+      const intensity = (trusted ? 0.04 : 0.02) + roads;
+      shareKnowledge(ctx, a.tribe, b.tribe, intensity * openness);
+      shareKnowledge(ctx, b.tribe, a.tribe, intensity * openness);
     }
   } else if (pair.d <= 6 && rel.hostility < 0.4) {
     // Living side by side spreads know-how slowly even without formal trade.

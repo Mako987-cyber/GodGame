@@ -48,7 +48,7 @@ export const SPEEDS: Record<Speed, { ticks: 1 | 10 | 50 | 100; pauseMs: number; 
 };
 
 /** Floating panels of the world screen. */
-export type PanelId = "overview" | "layers" | "legend" | "chronicle" | "stats";
+export type PanelId = "overview" | "layers" | "legend" | "chronicle" | "stats" | "technologies";
 
 /** UI-only state of the world page (never persisted, never the source of truth). */
 interface WorldUiState {

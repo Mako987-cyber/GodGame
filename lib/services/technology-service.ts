@@ -8,6 +8,8 @@ import {
   canResearch,
   researchAptitude,
   researchWeight,
+  variantByKey,
+  viewOf,
   techAffinity,
   techStatus,
   type TechConditionInput,
@@ -17,16 +19,18 @@ import {
 import { and, asc, eq } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as s from "@/lib/db/schema";
-import { tribeFromRow } from "@/lib/db/mappers";
+import { knowledgeFromRow, tribeFromRow } from "@/lib/db/mappers";
 import { getWorldRow, listEvents } from "@/lib/db/queries";
 import { notFound } from "@/lib/utils/errors";
 import {
   TECH_STATUSES,
+  civilizationKnowledgeSchema,
   civilizationTechnologyPageSchema,
   discoverableTechnologyPageSchema,
   technologyHistorySchema,
   settlementHistorySchema,
   worldTechnologiesSchema,
+  type CivilizationKnowledgeDTO,
   type CivilizationTechnologyPageDTO,
   type CivilizationTechnologyQuery,
   type DiscoverableTechnologyPageDTO,
@@ -87,6 +91,8 @@ async function loadTechState(db: Database, worldId: string) {
   ]);
   return { tribeRows, discoveries: discoveries as DiscoveryRow[] };
 }
+
+const holds = (tribe: Tribe, id: string) => tribe.techs.includes(id);
 
 function missingPrerequisites(tribe: Tribe, tech: TechnologyDefinition): string[] {
   return tech.prerequisites.filter((id) => !tribe.techs.includes(id));
@@ -151,6 +157,7 @@ export async function getCivilizationTechnologiesService(
   const all = TECHNOLOGIES.map((tech) => {
     const discovery = byTech.get(tech.id);
     const status = techStatus(tribe, tech.id);
+    const variant = holds(tribe, tech.id) ? variantByKey(tribe.techVariants?.[tech.id]) : null;
     const progress = tribe.techProgress[tech.id] ?? 0;
     const held = tribe.techs.includes(tech.id);
     return {
@@ -171,6 +178,9 @@ export async function getCivilizationTechnologiesService(
       missingPrerequisites: missingPrerequisites(tribe, tech),
       effectSummary: tech.effectSummary,
       tradeOff: tech.tradeOff,
+      localName: variant?.name ?? null,
+      localDescription: variant?.description ?? null,
+      localCause: variant?.cause ?? null,
     };
   });
 
@@ -212,11 +222,20 @@ export async function getDiscoverableTechnologiesService(
 ): Promise<DiscoverableTechnologyPageDTO> {
   const db = deps?.db ?? (await getDb());
   const row = await worldOrThrow(db, worldId);
-  const [tribeRows, relationships, settlementRows, cellRows] = await Promise.all([
+  const [tribeRows, relationships, settlementRows, cellRows, knowledgeRows] = await Promise.all([
     db.select().from(s.tribes).where(eq(s.tribes.worldId, worldId)).orderBy(asc(s.tribes.seq)),
     db.select().from(s.relationships).where(eq(s.relationships.worldId, worldId)),
     db.select().from(s.settlements).where(eq(s.settlements.worldId, worldId)),
     db.select().from(s.worldCells).where(eq(s.worldCells.worldId, worldId)),
+    db
+      .select()
+      .from(s.civilizationKnowledge)
+      .where(
+        and(
+          eq(s.civilizationKnowledge.worldId, worldId),
+          eq(s.civilizationKnowledge.observerId, civilizationId),
+        ),
+      ),
   ]);
   const tribes = tribeRows.map((r) => tribeFromRow(row.seed, r));
   const tribe = tribes.find((t) => t.id === civilizationId);
@@ -244,17 +263,19 @@ export async function getDiscoverableTechnologiesService(
     order: tribe.stability.order,
   };
 
-  // Peoples this one is actually in contact with, and what they use.
-  const neighbourIds = new Set(
-    rels.filter((r) => r.distance <= 12 && !r.atWar).map((r) => (r.aId === civilizationId ? r.bId : r.aId)),
-  );
-  const neighbours = tribes.filter((t) => neighbourIds.has(t.id) && t.status !== "extinct");
+  // What this people has SEEN its neighbours use — its own knowledge, possibly out of date —
+  // never what they actually use. Reading the neighbours' real technologies here would leak.
+  const nameOf = new Map(tribes.map((t) => [t.id, t.name]));
+  const seenUsing = (techId: string) =>
+    knowledgeRows
+      .filter((k) => k.technologies?.ids.includes(techId))
+      .map((k) => nameOf.get(k.targetId) ?? k.targetId);
 
   const items = TECHNOLOGIES.filter((tech) => {
     if (tribe.techs.includes(tech.id)) return false;
     const started = (tribe.techProgress[tech.id] ?? 0) > 0;
     const oneAway = missingPrerequisites(tribe, tech).length <= 1;
-    const seen = neighbours.some((n) => n.techs.includes(tech.id));
+    const seen = seenUsing(tech.id).length > 0;
     const remembered = tribe.techLost?.[tech.id] !== undefined;
     return started || oneAway || seen || remembered;
   }).map((tech) => {
@@ -275,7 +296,7 @@ export async function getDiscoverableTechnologiesService(
       prerequisitesMet: missingPrerequisites(tribe, tech).length === 0,
       missingPrerequisites: missingPrerequisites(tribe, tech),
       missingRequirements: missing.filter(Boolean),
-      knownByNeighbours: neighbours.filter((n) => n.techs.includes(tech.id)).map((n) => n.name),
+      knownByNeighbours: seenUsing(tech.id),
       previouslyLost: tribe.techLost?.[tech.id] !== undefined,
     };
   });
@@ -318,6 +339,9 @@ export async function getTechnologyHistoryService(
           ? Math.round((holder.techAdoption?.[technologyId] ?? 1) * 100)
           : 0,
         status: techStatus(holder, technologyId),
+        localName: holder.techs.includes(technologyId)
+          ? (variantByKey(holder.techVariants?.[technologyId])?.name ?? null)
+          : null,
       };
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -452,4 +476,48 @@ export async function getSettlementHistoryService(
     },
   };
   return settlementHistorySchema.parse(dto);
+}
+
+/**
+ * GET /api/worlds/:worldId/civilizations/:civilizationId/knowledge
+ *
+ * What one people believes about the others it has met. Built only from its own knowledge
+ * records: of the targets, nothing is read but their name.
+ */
+export async function getCivilizationKnowledgeService(
+  worldId: string,
+  observerId: string,
+  deps?: { db: Database },
+): Promise<CivilizationKnowledgeDTO> {
+  const db = deps?.db ?? (await getDb());
+  const row = await worldOrThrow(db, worldId);
+  const [observer] = await db
+    .select({ id: s.tribes.id })
+    .from(s.tribes)
+    .where(and(eq(s.tribes.worldId, worldId), eq(s.tribes.id, observerId)))
+    .limit(1);
+  if (!observer) throw notFound("Civiltà");
+  const [records, names] = await Promise.all([
+    db
+      .select()
+      .from(s.civilizationKnowledge)
+      .where(
+        and(eq(s.civilizationKnowledge.worldId, worldId), eq(s.civilizationKnowledge.observerId, observerId)),
+      )
+      .orderBy(asc(s.civilizationKnowledge.targetId)),
+    db.select({ id: s.tribes.id, name: s.tribes.name }).from(s.tribes).where(eq(s.tribes.worldId, worldId)),
+  ]);
+  const nameOf = new Map(names.map((n) => [n.id, n.name]));
+  const dto: CivilizationKnowledgeDTO = {
+    worldId,
+    observerId,
+    year: row.currentYear,
+    items: records.map((r) => ({
+      ...viewOf(knowledgeFromRow(r), row.currentYear),
+      targetName: nameOf.get(r.targetId) ?? r.targetId,
+      spyAttempts: r.spyAttempts,
+      spiesCaught: r.spiesCaught,
+    })),
+  };
+  return civilizationKnowledgeSchema.parse(dto);
 }

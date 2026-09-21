@@ -191,6 +191,7 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     techProgress: { ...parent.techProgress },
     techAdoption: { ...parent.techAdoption },
     techLost: { ...parent.techLost },
+    techVariants: { ...parent.techVariants },
     foundedYear: ctx.state.year,
     civilizationId: null,
     leaderId: null,
@@ -211,6 +212,7 @@ export function splitBand(ctx: SimContext, community: Community): Tribe | null {
     beliefAdherence: 0,
     cultureHistory: [],
     resilience: null,
+    causalAnchors: {},
   };
   child.stock.food = Math.round(parent.stock.food * 0.4 * 100) / 100;
   parent.stock.food = Math.round((parent.stock.food - child.stock.food) * 100) / 100;

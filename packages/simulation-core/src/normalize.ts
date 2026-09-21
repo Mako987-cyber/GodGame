@@ -145,6 +145,8 @@ export function normalizeTribe(seed: string, tribe: Tribe): Tribe {
   for (const id of tribe.techs) tribe.techAdoption[id] ??= 1;
   // Worlds created before technology could be lost have simply never lost any.
   tribe.techLost ??= {};
+  // Worlds from before local variants practise every technique in its catalogue form.
+  tribe.techVariants ??= {};
   tribe.culture ??= deriveCulture(seed, tribe.id);
   // Cultures saved before these four traits existed get them from the same deterministic
   // derivation the world would have used at creation: no randomness, no migration.
@@ -155,6 +157,8 @@ export function normalizeTribe(seed: string, tribe: Tribe): Tribe {
   tribe.culture.culturalCohesion ??= derived.culturalCohesion;
   tribe.cultureHistory ??= [];
   tribe.resilience ??= null;
+  // Older worlds remember no causes: links start from the first event after loading.
+  tribe.causalAnchors ??= {};
   tribe.government ??= inferGovernment(tribe);
   tribe.stability ??= defaultStability();
   tribe.distribution ??= "egalitarian" satisfies DistributionPolicy;
@@ -361,6 +365,8 @@ export function migrateState(state: WorldState): WorldState {
   state.beliefs ??= [];
   state.agreements ??= [];
   state.reputations ??= [];
+  // Worlds from before incomplete information start knowing nothing: it builds up by contact.
+  state.knowledge ??= [];
   state.vassalages ??= [];
   state.occupations ??= [];
   state.composites ??= [];

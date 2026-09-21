@@ -13,6 +13,7 @@ import {
   type CivilizationStats,
   type Civilization,
   type BeliefSystem,
+  type CivilizationKnowledge,
   type DiplomaticAgreement,
   type DiplomaticReputation,
   type Dynasty,
@@ -108,10 +109,12 @@ export const tribeFromRow = (seed: string, r: Select<typeof s.tribes>): Tribe =>
     techProgress: r.techProgress,
     techAdoption: r.techAdoption ?? {},
     techLost: r.techLost ?? {},
+    techVariants: r.techVariants ?? {},
     beliefSystemId: r.beliefSystemId ?? null,
     beliefAdherence: r.beliefAdherence ?? 0,
     cultureHistory: r.cultureHistory ?? [],
     resilience: r.resilience ?? null,
+    causalAnchors: r.causalAnchors ?? {},
     yearsAtLocation: r.yearsAtLocation,
     scarcityYears: r.scarcityYears,
     foundedYear: r.foundedYear,
@@ -461,6 +464,25 @@ export const reputationFromRow = (r: Select<typeof s.diplomaticReputations>): Di
   agreementsSigned: r.agreementsSigned,
   agreementsBroken: r.agreementsBroken,
   updatedAtTick: r.updatedAtTick,
+});
+
+export const knowledgeToRow = (
+  worldId: string,
+  k: CivilizationKnowledge,
+): Insert<typeof s.civilizationKnowledge> => ({ worldId, ...k });
+
+export const knowledgeFromRow = (r: Select<typeof s.civilizationKnowledge>): CivilizationKnowledge => ({
+  observerId: r.observerId,
+  targetId: r.targetId,
+  location: r.location ?? null,
+  population: r.population ?? null,
+  military: r.military ?? null,
+  stability: r.stability ?? null,
+  technologies: r.technologies ?? null,
+  intent: r.intent ?? null,
+  spyAttempts: r.spyAttempts,
+  spiesCaught: r.spiesCaught,
+  updatedYear: r.updatedYear,
 });
 
 export const civStatsToRow = (

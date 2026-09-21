@@ -1,3 +1,4 @@
+import { causesFrom } from "./causality";
 import { GOVERNMENTS } from "./constants";
 import type { SimContext } from "./context";
 import { actor, emitEvent } from "./events";
@@ -508,6 +509,7 @@ export function updateGovernment(
         { population, settlements, people: peoplePhrase(tribe), reason: step.reason },
       ),
       metadata: { from: previous, to: step.to, population, settlements, maxLevel },
+      causeEventIds: causesFrom(ctx.state.year, [[tribe, "revolt", 20]]),
     });
     return;
   }

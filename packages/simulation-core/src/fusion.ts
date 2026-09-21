@@ -251,6 +251,8 @@ export function fuse(
     techAdoption,
     // A fusion inherits what BOTH peoples had forgotten, minus what either still knows.
     techLost,
+    // A fused people keeps the local ways of the larger partner, then of the smaller.
+    techVariants: { ...minor.tribe.techVariants, ...major.tribe.techVariants },
     yearsAtLocation: major.tribe.yearsAtLocation,
     scarcityYears: 0,
     foundedYear: state.year,
@@ -281,6 +283,7 @@ export function fuse(
     beliefAdherence: 0,
     cultureHistory: [],
     resilience: null,
+    causalAnchors: {},
   };
   state.tribes.push(tribe);
   ctx.tribes.set(tribeId, tribe);

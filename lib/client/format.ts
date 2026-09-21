@@ -373,3 +373,28 @@ export const SPECIALIZATION_LABELS: Record<string, string> = {
   administrative: "amministrativa",
   craft: "artigiana",
 };
+
+export const KNOWLEDGE_SOURCE_LABELS: Record<string, string> = {
+  exploration: "esploratori",
+  trade: "mercanti",
+  diplomat: "ambasciatori",
+  spy: "spie",
+  battle: "battaglia",
+  rumor: "voci",
+};
+
+export const TECH_METHOD_SHORT_LABELS: Record<string, string> = {
+  starting: "dall'inizio",
+  invention: "scoperta",
+  diffusion: "appresa",
+  conquest: "conquista",
+  migration: "migrazione",
+  inherited: "ereditata",
+};
+
+export const TECH_CATEGORY_TITLES: Record<string, string> = {
+  survival: "Sopravvivenza",
+  neolithic: "Neolitico",
+  metals: "Metalli",
+  organization: "Organizzazione",
+};

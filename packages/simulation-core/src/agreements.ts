@@ -2,6 +2,7 @@ import { nextId, type SimContext } from "./context";
 import { actor, emitEvent } from "./events";
 import { clamp, round } from "./grid";
 import { formatEventDescription as t, polityPhrase } from "./language/format";
+import { byReputation } from "./serialization";
 import { np, type Gender, type NounPhrase } from "./language/italian";
 import type {
   DiplomaticAgreement,
@@ -234,7 +235,14 @@ export function signAgreement(
   const event = emitEvent(ctx, {
     type: "agreement",
     subtype: type,
-    importance: type === "military_alliance" || type === "defensive_alliance" ? 4 : 3,
+    // Alliances make history; routine pacts are record-keeping. Measured: with every signing
+    // at 3, pacts were the second largest share of the important chronicle.
+    importance:
+      type === "military_alliance" || type === "defensive_alliance"
+        ? 4
+        : type === "independence_guarantee" || type === "technology_exchange"
+          ? 3
+          : 2,
     actors: [actor.tribe(a), actor.tribe(b)],
     x: a.x,
     y: a.y,
@@ -440,4 +448,6 @@ export function updateAgreements(
       tradeVolume: rels.reduce((acc, r) => acc + r.tradeVolume, 0),
     });
   }
+  // `reputationOf` may have appended records: keep the order a reload would produce.
+  state.reputations.sort(byReputation);
 }

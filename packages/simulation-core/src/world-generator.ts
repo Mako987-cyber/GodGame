@@ -142,6 +142,7 @@ export function createWorld(options: CreateWorldOptions): WorldState {
     beliefs: [],
     agreements: [],
     reputations: [],
+    knowledge: [],
     vassalages: [],
     occupations: [],
     composites: [],
@@ -176,6 +177,7 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       techProgress: {},
       techAdoption: {},
       techLost: {},
+      techVariants: {},
       yearsAtLocation: 0,
       scarcityYears: 0,
       foundedYear: state.year,
@@ -202,6 +204,7 @@ export function createWorld(options: CreateWorldOptions): WorldState {
       beliefAdherence: 0,
       cultureHistory: [],
       resilience: null,
+      causalAnchors: {},
     };
     state.tribes.push(tribe);
     const members = populateTribe(state, tribe, rng.int(settings.minTribeSize, settings.maxTribeSize), rng);
@@ -287,6 +290,7 @@ function populateHistoricalWorld(
       techProgress: {},
       techAdoption: Object.fromEntries(start.technologies.map((t) => [t, 1])),
       techLost: {},
+      techVariants: {},
       yearsAtLocation: 0,
       scarcityYears: 0,
       foundedYear: state.year,
@@ -313,6 +317,7 @@ function populateHistoricalWorld(
       beliefAdherence: 0,
       cultureHistory: [],
       resilience: null,
+      causalAnchors: {},
     };
     state.tribes.push(tribe);
     const size = sharedSize ?? rng.int(settings.minTribeSize, settings.maxTribeSize);

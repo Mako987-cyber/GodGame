@@ -230,12 +230,7 @@ export function WorldTimeline({ detail, actorId }: { detail: WorldDetail; actorI
                   </Button>
                 </div>
                 {explaining === e.id && (
-                  <EventExplanation
-                    event={e}
-                    detail={detail}
-                    causes={query.data.items.filter((c) => e.causeEventIds.includes(c.id))}
-                    onSelectCause={(id) => explain(id)}
-                  />
+                  <EventExplanation event={e} detail={detail} onSelectCause={(id) => explain(id)} />
                 )}
               </div>
             </li>

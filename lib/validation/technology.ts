@@ -102,6 +102,10 @@ export const civilizationTechnologySchema = z.object({
   missingPrerequisites: z.array(z.string()),
   effectSummary: z.string(),
   tradeOff: z.string().nullable(),
+  /** How this people practises it where it lives, when its land called for an adaptation. */
+  localName: z.string().nullable(),
+  localDescription: z.string().nullable(),
+  localCause: z.string().nullable(),
 });
 
 export const civilizationTechnologyPageSchema = z.object({
@@ -133,7 +137,10 @@ export const discoverableTechnologySchema = z.object({
   missingPrerequisites: z.array(z.string()),
   /** Requirements the people does not meet yet, in plain language. */
   missingRequirements: z.array(z.string()),
-  /** Peoples already using it that this one is in contact with. */
+  /**
+   * Peoples this one has SEEN using it, from its own (possibly stale) knowledge — not the
+   * truth. A neighbour that adopted it unseen is not listed.
+   */
   knownByNeighbours: z.array(z.string()),
   previouslyLost: z.boolean(),
 });
@@ -161,6 +168,8 @@ export const technologyHistorySchema = z.object({
       method: z.string(),
       adoptionPercentage: z.number(),
       status: z.enum(TECH_STATUSES),
+      /** The local form this people practises, when its land called for one. */
+      localName: z.string().nullable(),
     }),
   ),
   lostBy: z.array(z.object({ civilizationId: z.string(), name: z.string(), year: z.number() })),
@@ -246,3 +255,43 @@ export type SettlementHistoryDTO = z.infer<typeof settlementHistorySchema>;
 
 export const settlementHistoryQuerySchema = z.object({ page, pageSize });
 export type SettlementHistoryQuery = z.infer<typeof settlementHistoryQuerySchema>;
+
+const estimateSchema = z
+  .object({
+    value: z.number(),
+    confidence: z.number(),
+    year: z.number(),
+    source: z.enum(["exploration", "trade", "diplomat", "spy", "battle", "rumor"]),
+  })
+  .nullable();
+
+/**
+ * What one people believes about the others. Every number here is an ESTIMATE from the
+ * observer's own record: the contract has no field that could carry the truth.
+ */
+export const civilizationKnowledgeSchema = z.object({
+  worldId: z.string(),
+  observerId: z.string(),
+  year: z.number(),
+  items: z.array(
+    z.object({
+      targetId: z.string(),
+      targetName: z.string(),
+      lastSeen: z.object({ x: z.number(), y: z.number(), year: z.number() }).nullable(),
+      population: estimateSchema,
+      military: estimateSchema,
+      stability: estimateSchema,
+      technologies: z
+        .object({ ids: z.array(z.string()), confidence: z.number(), year: z.number(), source: z.string() })
+        .nullable(),
+      intent: z
+        .object({ hostile: z.boolean(), confidence: z.number(), year: z.number(), source: z.string() })
+        .nullable(),
+      staleness: z.number(),
+      spyAttempts: z.number(),
+      spiesCaught: z.number(),
+    }),
+  ),
+});
+
+export type CivilizationKnowledgeDTO = z.infer<typeof civilizationKnowledgeSchema>;

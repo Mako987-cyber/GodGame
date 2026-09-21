@@ -1,8 +1,10 @@
+import { anchor, causesFrom, releaseAnchor } from "./causality";
 import type { Community, SimContext } from "./context";
 import { actor, emitEvent } from "./events";
 import { cellsInRadius, clamp, round } from "./grid";
 import { formatEventDescription as t, peoplePhrase } from "./language/format";
 import { hashFloat } from "./prng";
+import { variantByKey, variantFor, variantPhrase } from "./tech-variants";
 import type { Cell, CultureTraits, Tribe } from "./types";
 
 export interface TechEffects {
@@ -736,6 +738,8 @@ export function tribeEffects(tribe: Tribe): TechEffects {
     if (!effects) continue;
     const adoption = clamp(tribe.techAdoption?.[id] ?? 1, 0.1, 1);
     applyEffects(result, effects, adoption);
+    const variant = variantByKey(tribe.techVariants?.[id]);
+    if (variant) applyEffects(result, variant.effects, adoption);
   }
   return result;
 }
@@ -817,6 +821,11 @@ export function grantTech(
   tribe.techAdoption[techId] = rediscovery
     ? clamp(INITIAL_ADOPTION[method] + 0.15, 0, 1)
     : INITIAL_ADOPTION[method];
+  // How this people will practise it depends on its own land, whoever it learned it from.
+  const variant = variantFor(techId, cellsInRadius(ctx.state, tribe.x, tribe.y, 3), tribe);
+  tribe.techVariants ??= {};
+  if (variant) tribe.techVariants[techId] = variant.key;
+  else delete tribe.techVariants[techId];
   for (const p of ctx.state.people) {
     if (p.alive && p.tribeId === tribe.id && !p.knowledge.includes(techId)) p.knowledge.push(techId);
   }
@@ -855,6 +864,9 @@ export function grantTech(
           ? t("{v:people:ha|hanno} acquisito con la conquista", { people })
           : t("{v:people:ha|hanno} appreso dai nuovi arrivati", { people });
   emitEvent(ctx, {
+    ...(rediscovery
+      ? { causeEventIds: causesFrom(ctx.state.year, [[tribe, `lost:${techId}`, Number.MAX_SAFE_INTEGER]]) }
+      : {}),
     type: "tech_discovered",
     subtype: rediscovery ? "rediscovery" : method,
     importance: major || rediscovery ? 4 : 3,
@@ -866,11 +878,17 @@ export function grantTech(
     x: tribe.x,
     y: tribe.y,
     title: `${tribe.name}: ${tech.name}`,
-    description: t("{Art:people} {how} la tecnica: {tech}. {effect}.{inventor}", {
+    description: t("{Art:people} {how} la tecnica: {tech}. {effect}.{local}{inventor}", {
       people,
       how,
       tech: tech.name.toLowerCase(),
       effect: tech.effectSummary,
+      local: variant
+        ? t(" Qui prende la forma {di:variant}, per via di {cause}.", {
+            variant: variantPhrase(variant),
+            cause: variant.cause,
+          })
+        : "",
       inventor: inventor ? ` L'intuizione si deve a ${inventor.name}.` : "",
     }),
     metadata: {
@@ -883,8 +901,11 @@ export function grantTech(
       tradeOff: tech.tradeOff,
       rediscovery,
       lostYear: lostYear ?? null,
+      variant: variant?.key ?? null,
     },
   });
+  // The loss has been answered: it is no longer an open cause.
+  if (rediscovery) releaseAnchor(tribe, `lost:${techId}`);
   return true;
 }
 
@@ -1061,10 +1082,11 @@ export function loseTech(
   tribe.techs.splice(index, 1);
   delete tribe.techAdoption[tech.id];
   delete tribe.techProgress[tech.id];
+  if (tribe.techVariants) delete tribe.techVariants[tech.id];
   tribe.techLost ??= {};
   tribe.techLost[tech.id] = ctx.state.year;
   // Techniques that depended on this one cannot survive it either: they decay next year.
-  emitEvent(ctx, {
+  const lost = emitEvent(ctx, {
     type: "tech_discovered",
     subtype: "lost",
     importance: tech.category === "survival" ? 3 : 4,
@@ -1085,7 +1107,13 @@ export function loseTech(
       settled: input.settled,
       lostYear: ctx.state.year,
     },
+    causeEventIds: causesFrom(ctx.state.year, [
+      [tribe, "collapse", 40],
+      [tribe, "famine", 20],
+    ]),
   });
+  // A later rediscovery names this loss as its cause.
+  anchor(tribe, `lost:${tech.id}`, lost);
   return true;
 }
 

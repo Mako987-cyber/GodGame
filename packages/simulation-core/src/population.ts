@@ -1,3 +1,4 @@
+import { anchor } from "./causality";
 import { createPerson } from "./agents";
 import { identityOf } from "./identity/composite";
 import { winterMortalityFactor } from "./climate";
@@ -78,7 +79,7 @@ export function killPerson(ctx: SimContext, person: Person, cause: DeathCause) {
     tribe.stability.tension = clamp(tribe.stability.tension + 0.08);
     const followers = state.people.reduce((acc, p) => acc + (p.alive && p.tribeId === tribe.id ? 1 : 0), 0);
     const settled = state.settlements.some((s) => s.status === "active" && s.tribeId === tribe.id);
-    emitEvent(ctx, {
+    const death = emitEvent(ctx, {
       type: "notable_death",
       subtype: "leader",
       importance: followers >= 150 ? 4 : followers >= 50 || settled ? 3 : 2,
@@ -103,6 +104,8 @@ export function killPerson(ctx: SimContext, person: Person, cause: DeathCause) {
         yearsInPower: person.titleSinceYear === null ? null : state.year - person.titleSinceYear,
       },
     });
+    // The succession that follows names this death as its cause.
+    anchor(tribe, "leader_death", death);
   } else if (person.notable && person.prestige >= 0.8 && person.title !== null && person.age >= 30 && tribe) {
     emitEvent(ctx, {
       type: "notable_death",

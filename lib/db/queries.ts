@@ -248,6 +248,7 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
     beliefs,
     agreements,
     reputations,
+    knowledge,
   ] = await Promise.all([
     db
       .select()
@@ -299,6 +300,11 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       .from(s.diplomaticReputations)
       .where(eq(s.diplomaticReputations.worldId, worldId))
       .orderBy(asc(s.diplomaticReputations.civilizationId)),
+    db
+      .select()
+      .from(s.civilizationKnowledge)
+      .where(eq(s.civilizationKnowledge.worldId, worldId))
+      .orderBy(asc(s.civilizationKnowledge.observerId), asc(s.civilizationKnowledge.targetId)),
   ]);
   // `migrateState` fills everything a world created by an older engine version is missing.
   const state: WorldState = normalizeState(
@@ -328,6 +334,7 @@ export async function loadWorldState(db: Database, worldId: string): Promise<Loa
       beliefs: beliefs.map(m.beliefFromRow),
       agreements: agreements.map(m.agreementFromRow),
       reputations: reputations.map(m.reputationFromRow),
+      knowledge: knowledge.map(m.knowledgeFromRow),
       vassalages: vassalages.map(m.vassalFromRow),
       occupations: occupations.map(m.occupationFromRow),
       composites: composites.map(m.compositeFromRow),
@@ -460,6 +467,13 @@ export async function persistSimulation(
     state.reputations.map((r) => m.reputationToRow(worldId, r)),
     [s.diplomaticReputations.worldId, s.diplomaticReputations.civilizationId],
     ["worldId", "civilizationId"],
+  );
+  await bulkUpsert(
+    tx,
+    s.civilizationKnowledge,
+    state.knowledge.map((k) => m.knowledgeToRow(worldId, k)),
+    [s.civilizationKnowledge.worldId, s.civilizationKnowledge.observerId, s.civilizationKnowledge.targetId],
+    ["worldId", "observerId", "targetId"],
   );
 
   if (result.events.length)

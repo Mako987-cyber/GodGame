@@ -1,5 +1,6 @@
 "use client";
 
+import { variantByKey } from "@genesis/simulation-core";
 import { MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import {
   DynastySection,
   ResilienceSection,
 } from "./civilization-life";
+import { KnowledgeSection } from "./knowledge-section";
 import { TribePoliticsSection } from "./political-bonds";
 import { EntityLink, Facts, Meter, StockList, SubHeading, TraitList } from "./stat-bits";
 
@@ -149,9 +151,12 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
           {tribe.techs.map((id) => {
             const def = detail.technologies.find((t) => t.id === id);
             const adoption = tribe.techAdoption[id] ?? 1;
+            const local = variantByKey(tribe.techVariants?.[id]);
             return (
               <li key={id} className="flex justify-between gap-2">
-                <span title={def?.description}>{def?.name ?? id}</span>
+                <span title={local ? `${local.description} (${def?.name ?? id})` : def?.description}>
+                  {local ? local.name : (def?.name ?? id)}
+                </span>
                 <span className="text-muted text-xs">
                   {adoption < 0.95 ? `adozione ${fmtPct(adoption)}` : def?.effectSummary}
                 </span>
@@ -181,6 +186,7 @@ export function TribePanel({ tribe, detail }: { tribe: TribeDTO; detail: WorldDe
         </>
       )}
       <DiplomacySection tribe={tribe} detail={detail} />
+      <KnowledgeSection tribe={tribe} detail={detail} />
       <TribePoliticsSection tribe={tribe} detail={detail} />
       <SubHeading>Relazioni</SubHeading>
       {relations.length === 0 ? (

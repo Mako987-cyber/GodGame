@@ -26,6 +26,9 @@ const MILESTONE_MIGRATIONS = [
   "0010_culture_traits",
   "0011_diplomatic_agreements",
   "0012_resilience",
+  "0013_civilization_knowledge",
+  "0014_causal_anchors",
+  "0015_tech_variants",
 ] as const;
 
 describe("migrazioni della milestone", () => {

@@ -3,6 +3,7 @@ import { TECHNOLOGIES } from "@genesis/simulation-core";
 import type { Database } from "@/lib/db";
 import { InMemorySimulationLock } from "@/lib/db/lock";
 import {
+  getCivilizationKnowledgeService,
   getCivilizationTechnologiesService,
   getDiscoverableTechnologiesService,
   getSettlementHistoryService,
@@ -212,5 +213,44 @@ describe("storia di un insediamento", () => {
     await expect(
       getSettlementHistoryService(worldId, "s9999", { page: 1, pageSize: 10 }, { db }),
     ).rejects.toBeInstanceOf(AppError);
+  });
+});
+
+describe("conoscenza filtrata per osservatore", () => {
+  it("restituisce solo stime, mai i valori reali dei bersagli", async () => {
+    const { loadWorldState } = await import("@/lib/db/queries");
+    const loaded = (await loadWorldState(db, worldId))!;
+    const withRecords = loaded.state.knowledge.find((k) => k.population !== null);
+    if (!withRecords) return;
+    const page = await getCivilizationKnowledgeService(worldId, withRecords.observerId, { db });
+    const records = loaded.state.knowledge.filter((k) => k.observerId === withRecords.observerId);
+    // Exactly the peoples this observer has met, no others.
+    expect(page.items.map((i) => i.targetId).sort()).toEqual(records.map((k) => k.targetId).sort());
+    for (const item of page.items) {
+      const record = records.find((k) => k.targetId === item.targetId)!;
+      // Every number comes from the observer's record, whatever the truth is.
+      expect(item.population).toEqual(record.population);
+      expect(item.military).toEqual(record.military);
+      expect(item.stability).toEqual(record.stability);
+      expect(item.technologies?.ids ?? null).toEqual(record.technologies?.ids ?? null);
+    }
+  });
+
+  it("le tecnologie viste nei vicini vengono dalla conoscenza, non dalla realtà", async () => {
+    const { loadWorldState } = await import("@/lib/db/queries");
+    const loaded = (await loadWorldState(db, worldId))!;
+    const page = await getDiscoverableTechnologiesService(worldId, civilizationId, { db });
+    const seen = loaded.state.knowledge.filter((k) => k.observerId === civilizationId);
+    const nameOf = new Map(loaded.state.tribes.map((t) => [t.id, t.name]));
+    for (const item of page.items) {
+      const expected = seen
+        .filter((k) => k.technologies?.ids.includes(item.technologyId))
+        .map((k) => nameOf.get(k.targetId));
+      expect(item.knownByNeighbours.sort()).toEqual(expected.sort());
+    }
+  });
+
+  it("rifiuta un osservatore inesistente", async () => {
+    await expect(getCivilizationKnowledgeService(worldId, "t9999", { db })).rejects.toBeInstanceOf(AppError);
   });
 });
