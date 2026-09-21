@@ -100,6 +100,15 @@ const TRANSIENT_MESSAGES = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|CONNECTION_CLOSED|
 const POOL_EXHAUSTED = /ECHECKOUTTIMEOUT|MaxClientsInSessionMode|max clients reached/i;
 
 /**
+ * Supavisor authenticates each client by fetching its secret from Postgres with an internal
+ * query. When the database is slow to answer — typically because its own connection slots are
+ * busy — that lookup times out and the client is refused with `(EAUTHQUERY) auth_query secret
+ * check timed out`, again as a generic `XX000`. It is the same contention seen from the other
+ * side, and it clears the same way. A wrong password is a different error (`28P01`), never this.
+ */
+const AUTH_QUERY_TIMEOUT = /EAUTHQUERY|auth_query secret check timed out/i;
+
+/**
  * Errors worth retrying later: lock/statement timeouts, deadlocks, serialization failures,
  * dropped or refused connections, a saturated pooler. Nothing was committed by the failed
  * transaction.
@@ -107,7 +116,7 @@ const POOL_EXHAUSTED = /ECHECKOUTTIMEOUT|MaxClientsInSessionMode|max clients rea
 export function isTransientDbError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const causes = [message, ...causeMessages(error)].join("\n");
-  if (POOL_EXHAUSTED.test(causes)) return true;
+  if (POOL_EXHAUSTED.test(causes) || AUTH_QUERY_TIMEOUT.test(causes)) return true;
   const code = pgErrorCode(error);
   if (code) return TRANSIENT_CODES.includes(code) || code.startsWith("08");
   return TRANSIENT_MESSAGES.test(causes);
