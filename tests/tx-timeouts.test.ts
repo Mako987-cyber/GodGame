@@ -84,6 +84,24 @@ describe("isTransientDbError", () => {
     expect(pgErrorCode(poolerExhausted())).toBe("XX000");
   });
 
+  it("considera transitorio il timeout dell'auth_query di Supavisor (deploy di preview della #11)", () => {
+    // The exact shape Vercel logged on 2026-09-21: rejected at authentication, before any SQL.
+    const cause = Object.assign(new Error("(EAUTHQUERY) auth_query secret check timed out"), {
+      code: "XX000",
+      severity_local: "FATAL",
+    });
+    const error = new Error('Failed query: CREATE SCHEMA IF NOT EXISTS "drizzle"', { cause });
+    expect(pgErrorCode(error)).toBe("XX000");
+    expect(isTransientDbError(error)).toBe(true);
+  });
+
+  it("non confonde una password sbagliata con un timeout di autenticazione", () => {
+    const cause = Object.assign(new Error('password authentication failed for user "postgres"'), {
+      code: "28P01",
+    });
+    expect(isTransientDbError(new Error("Failed query: select 1", { cause }))).toBe(false);
+  });
+
   it("riconosce anche MaxClientsInSessionMode", () => {
     expect(isTransientDbError(new Error("MaxClientsInSessionMode: max clients reached"))).toBe(true);
   });
