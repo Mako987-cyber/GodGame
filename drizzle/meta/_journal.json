@@ -92,6 +92,27 @@
       "when": 1789918774020,
       "tag": "0012_resilience",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790011173273,
+      "tag": "0013_civilization_knowledge",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790012144309,
+      "tag": "0014_causal_anchors",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790012474701,
+      "tag": "0015_tech_variants",
+      "breakpoints": true
     }
   ]
 }

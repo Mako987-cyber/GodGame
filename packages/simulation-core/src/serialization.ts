@@ -64,8 +64,24 @@ export function normalizeState(state: WorldState): WorldState {
   state.climate.hazards ??= [];
   state.climate.hazards.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   state.archive ??= { people: [], households: [] };
+  // Lists without a sequence number get a canonical order too: the database returns them in
+  // its own order, and a replay must iterate them exactly as the original run did.
+  state.reputations ??= [];
+  state.reputations.sort(byReputation);
+  state.knowledge ??= [];
+  state.knowledge.sort(byKnowledge);
   return state;
 }
+
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+export const byReputation = (a: { civilizationId: string }, b: { civilizationId: string }) =>
+  cmp(a.civilizationId, b.civilizationId);
+
+export const byKnowledge = (
+  a: { observerId: string; targetId: string },
+  b: { observerId: string; targetId: string },
+) => cmp(a.observerId, b.observerId) || cmp(a.targetId, b.targetId);
 
 /** JSON with sorted object keys: JSONB storage does not preserve key order. */
 function canonicalJson(value: unknown): string {

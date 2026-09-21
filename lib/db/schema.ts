@@ -22,6 +22,7 @@ import type {
   VassalRelationship,
   ActiveCrisis,
   BuildingType,
+  CivilizationKnowledge,
   ConflictPhase,
   ConstructionProject,
   Counters,
@@ -42,6 +43,7 @@ import type {
   GovernmentType,
   IdentityType,
   JsonValue,
+  KnowledgeEstimate,
   Personality,
   ResilienceProfile,
   SettlementHistory,
@@ -169,12 +171,19 @@ export const tribes = pgTable(
     techAdoption: jsonb("tech_adoption").$type<Record<string, number>>().notNull().default({}),
     /** techId -> year it was lost. Empty for worlds that predate technology loss. */
     techLost: jsonb("tech_lost").$type<Record<string, number>>().notNull().default({}),
+    /** techId -> key of the local form of the technique this people practises. */
+    techVariants: jsonb("tech_variants").$type<Record<string, string>>().notNull().default({}),
     beliefSystemId: text("belief_system_id"),
     beliefAdherence: doublePrecision("belief_adherence").notNull().default(0),
     /** Bounded ring of the last notable cultural shifts (see `MAX_CULTURE_HISTORY`). */
     cultureHistory: jsonb("culture_history").$type<CultureChangeRecord[]>().notNull().default([]),
     /** Recomputed every tick by the engine; stored so the API and the interface can show it. */
     resilience: jsonb("resilience").$type<ResilienceProfile | null>(),
+    /** Last event of a few kinds per people, so later events can name their cause. Bounded. */
+    causalAnchors: jsonb("causal_anchors")
+      .$type<Record<string, { eventId: string; year: number }>>()
+      .notNull()
+      .default({}),
     yearsAtLocation: integer("years_at_location").notNull(),
     scarcityYears: integer("scarcity_years").notNull(),
     foundedYear: integer("founded_year").notNull(),
@@ -632,6 +641,29 @@ export const diplomaticReputations = pgTable(
     updatedAtTick: integer("updated_at_tick").notNull(),
   },
   (t) => [primaryKey({ columns: [t.worldId, t.civilizationId] })],
+);
+
+/**
+ * What each people believes about the others it has met: estimates with confidence, year and
+ * source. One row per ordered pair (observer, target). Never the truth.
+ */
+export const civilizationKnowledge = pgTable(
+  "civilization_knowledge",
+  {
+    worldId: worldRef(),
+    observerId: text("observer_id").notNull(),
+    targetId: text("target_id").notNull(),
+    location: jsonb("location").$type<CivilizationKnowledge["location"]>(),
+    population: jsonb("population").$type<KnowledgeEstimate | null>(),
+    military: jsonb("military").$type<KnowledgeEstimate | null>(),
+    stability: jsonb("stability").$type<KnowledgeEstimate | null>(),
+    technologies: jsonb("technologies").$type<CivilizationKnowledge["technologies"]>(),
+    intent: jsonb("intent").$type<CivilizationKnowledge["intent"]>(),
+    spyAttempts: integer("spy_attempts").notNull().default(0),
+    spiesCaught: integer("spies_caught").notNull().default(0),
+    updatedYear: integer("updated_year").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.worldId, t.observerId, t.targetId] })],
 );
 
 /** Explicit vassal relationships (active and ended: never deleted while the world exists). */

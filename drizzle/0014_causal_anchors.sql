@@ -1,0 +1,1 @@
+ALTER TABLE "tribes" ADD COLUMN "causal_anchors" jsonb DEFAULT '{}'::jsonb NOT NULL;

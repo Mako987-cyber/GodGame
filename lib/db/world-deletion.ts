@@ -62,6 +62,7 @@ export const WORLD_CHILD_TABLES = [
   { name: "belief_systems", table: s.beliefSystems, batch: 5000 },
   { name: "diplomatic_agreements", table: s.diplomaticAgreements, batch: 5000 },
   { name: "diplomatic_reputations", table: s.diplomaticReputations, batch: 5000 },
+  { name: "civilization_knowledge", table: s.civilizationKnowledge, batch: 5000 },
   { name: "households", table: s.households, batch: 5000 },
   { name: "people", table: s.people, batch: 5000 },
   { name: "dynasties", table: s.dynasties, batch: 5000 },

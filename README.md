@@ -226,6 +226,9 @@ npm run test:simulation # stress del motore: invarianti, 20 seed × mappe piccol
 npm run test:world-delete  # eliminazione dei mondi (PGlite; + Postgres reale se TEST_DATABASE_URL è impostata)
 npm run diagnose:world-delete -- --world-id <uuid>  # diagnosi in sola lettura di un'eliminazione
 npm run test:all        # entrambe le suite
+npm run simulation:run -- --scenario fertile-valley --seed test-001 --ticks 200 [--profile]
+npm run simulation:compare -- --scenario trade-corridor --seed test-002
+npm run simulation:stress -- [--seeds 20] [--ticks 200] [--scenario-seeds 3]
 npm run lint            # ESLint (config Next core-web-vitals + TypeScript)
 npm run typecheck       # tsc --noEmit (strict, noUncheckedIndexedAccess)
 npm run format          # Prettier
@@ -798,6 +801,47 @@ debole a portata, la guerra vale esattamente zero: la fame non basta a giustific
 
 ### Insediamenti e infrastrutture
 
+### Informazione incompleta e spionaggio
+
+Il motore conosce la verità; i popoli no. Per ogni altro popolo incontrato, ciascuno tiene un record
+(`CivilizationKnowledge`) di **stime**: quanti sono, quanto sono forti, quanto sono ordinati, quali tecniche
+usano, se sono ostili — ognuna con fiducia, anno e fonte. Gli esploratori vedono dove vivono e più o meno quanti
+sono; i mercanti contano le teste e vedono gli attrezzi in uso; gli ambasciatori capiscono le intenzioni; la
+battaglia misura l'esercito. Ogni anno senza notizie la fiducia scende (`KNOWLEDGE_DECAY`), sotto una soglia
+la stima diventa «voce» e poi si dimentica; resta solo l'ultima posizione nota.
+
+L'errore è **deterministico** (hash del seme, della coppia, del tipo di dato e dell'anno) e cresce al calare
+della fiducia: a fiducia piena la stima è esatta, a fiducia zero può sbagliare fino all'80%.
+
+Lo **spionaggio** si rivolge a rivali e nemici, raramente (`spyEffort`): riuscito porta stime sicure e un po'
+del sapere del bersaglio; ingannato porta un errore sicuro di sé; scoperto alza l'ostilità. La **decisione di
+dichiarare guerra si basa sulla stima** (`perceivedPower`), la battaglia sulla realtà: un popolo che
+sopravvaluta il proprio vantaggio attacca e perde, e l'evento lo dice («da una stima del nemico più ottimista
+del vero», con `advantage` percepito e `realAdvantage` nei metadata).
+
+Filtraggio per osservatore: `/civilizations/:id/knowledge` restituisce **solo** il record dell'osservatore —
+il contratto non ha un campo che possa trasportare la verità — e le tecniche «viste nei vicini» di
+`/discoverable` vengono dalla conoscenza, non da ciò che i vicini usano davvero.
+
+### Causalità: perché è successo
+
+Ogni evento porta le proprie cause (`causeEventIds`). Molte però sono emesse in un batch precedente e non sono
+più in memoria: una pace arriva anni dopo la guerra che chiude. Per questo ogni popolo tiene pochi
+**ancoraggi causali** (`causality.ts`): l'ultima guerra con ciascun nemico, l'ultima carestia, l'ultimo
+collasso, l'ultima morte del sovrano, l'ultima rivolta, l'ultima tecnica perduta. Gli eventi successivi li
+citano se sono abbastanza recenti: la battaglia cita la guerra, la pace la guerra che chiude, il crollo la
+carestia, la successione la morte del sovrano, la riscoperta la perdita. Sono al massimo 24 per popolo e
+vengono rilasciati quando la loro storia si chiude.
+
+Il pannello «Perché è successo?» risale la catena **nel database** (`/events/:eventId/causality`): cause fino
+a quattro livelli e conseguenze dirette, una query per livello. Prima le cause si vedevano solo se capitavano
+sulla stessa pagina della cronaca.
+
+Indice GIN su `cause_event_ids`: **non aggiunto**, dopo aver misurato il piano. La ricerca delle conseguenze
+(`@>` su JSONB) usa l'indice per mondo e filtra: 7,6 ms su 20.000 eventi nello stesso mondo, contro qualche
+migliaio in un mondo reale a 500 tick. L'indice costerebbe su ogni inserimento di evento — la tabella con più
+scritture — per risparmiare millisecondi su un click. Da rivalutare oltre i 100.000 eventi per mondo.
+
 ### Insediamenti e infrastrutture
 
 - **Fondazione**: banda con ≥ 25 persone, ferma da ≥ 8 anni, fabbisogno coperto, scorte, cella con abitabilità
@@ -844,7 +888,7 @@ sono più riutilizzabili.
 
 ### Tecnologie
 
-Ventuno tecnologie in quattro categorie: **sopravvivenza** (fuoco, utensili di pietra, abiti, conservazione degli
+Ventidue tecnologie in quattro categorie: **sopravvivenza** (fuoco, utensili di pietra, abiti, conservazione degli
 alimenti, pesca), **neolitico** (agricoltura, ceramica, allevamento, tessitura, irrigazione, ruota, costruzione
 avanzata), **metalli** (rame, fonderia, bronzo, ferro, attrezzi metallici) e **organizzazione** (scrittura,
 tassazione, leggi, organizzazione militare, commercio a lunga distanza). Ognuna dichiara prerequisiti,
@@ -897,6 +941,17 @@ Un popolo sano non perde mai nulla: senza pressione la deriva è esattamente zer
 Il registro `techLost` conserva l'anno della perdita per sempre. Chi la ritrova paga un costo ridotto
 (`REDISCOVERY_SPEED`): restano le rovine, gli attrezzi, i racconti degli anziani. La riscoperta genera un evento
 con `subtype: "rediscovery"` e l'anno in cui la tecnica era stata perduta.
+
+#### Varianti locali
+
+Una tecnica ha una forma locale solo quando la terra la richiede davvero: l'agricoltura su un fiume che
+esonda diventa **Coltura delle Piene**, sulle colline **Coltivazione a terrazze**; la pesca su una costa aperta
+diventa **Pesca d'altura**. Nove forme per sette tecniche, scelte da `variantFor` leggendo l'area lavorata —
+mai l'identità storica: due popoli sulla stessa costa pescano allo stesso modo. Chi impara una tecnica da un
+altro popolo la adatta alla **propria** terra. Ogni forma porta un piccolo effetto coerente con l'ambiente (un
+solo moltiplicatore, al massimo +12%), scalato dall'adozione come ogni effetto tecnologico, e si perde insieme
+alla tecnica. Il nome locale compare nella cronaca, nelle schede e nell'API (`localName`, `localDescription`,
+`localCause`).
 
 ### Cultura, governo e stabilità
 
@@ -1237,6 +1292,8 @@ Tutte le risposte hanno la forma `{ "data": … }` oppure `{ "error": { "code", 
 | `GET`    | `/api/worlds/:id/civilizations/:civId/technologies/discoverable` | solo ciò che è a portata (in corso, a un prerequisito, già visto nei vicini, o perso), con affinità, peso e requisiti mancanti                             |
 | `GET`    | `/api/worlds/:id/technologies/:techId/history`                   | come una tecnologia ha viaggiato in quel mondo: pioniere, chi l'ha presa e come, chi l'ha persa, anni di diffusione, eventi collegati                      |
 | `GET`    | `/api/worlds/:id/settlements/:settlementId/history`              | memoria del luogo: ragione della fondazione, fondatore, specializzazioni, picco, distruzioni, ricostruzioni, periodi come capitale, cronologia paginata    |
+| `GET`    | `/api/worlds/:id/civilizations/:civId/knowledge`                 | ciò che un popolo **crede** degli altri: stime con fiducia, anno e fonte, mai la verità; i popoli mai incontrati non compaiono                             |
+| `GET`    | `/api/worlds/:id/events/:eventId/causality`                      | catena delle cause (fino a 4 livelli, max 40 eventi) e conseguenze dirette, risolte nel database                                                           |
 | `GET`    | `/api/historical-identities`                                     | catalogo: `search` (nome, alias, regione), `era` (ancient, classical, medieval, modern, indigenous, regional), `category`, `continent`, `page`, `pageSize` |
 | `GET`    | `/api/historical-identities/:key`                                | dettaglio di un'identità, con modificatori, fonti, note e stato iniziale comune                                                                            |
 | `GET`    | `/api/cron/advance`                                              | modalità autonoma opzionale, protetta da `CRON_SECRET` (401 se non configurata)                                                                            |
@@ -1382,7 +1439,43 @@ Quando verrà introdotta l'autenticazione (Supabase Auth), le tabelle esposte al
 finché l'accesso passa solo dal server con credenziali di servizio, l'RLS non è aggirabile dal browser perché il
 browser non parla mai direttamente con il database.
 
+## Scenari e stress
+
+Tredici scenari riproducibili (`scenarios.ts`) rimodellano un mondo generato per porre una domanda sola al
+motore: valle fertile, deserto, isola, corridoio commerciale, due potenze rivali, regione mineraria, città
+sovrappopolata, civiltà frammentata, identità moderne, popoli inclini alla fusione, diffusione intensa, mondo
+isolato, più la baseline. Ogni modifica usa uno stream derivato dal seme, mai l'RNG della simulazione.
+
+`simulation:stress` (20 semi × mappe 32/48/72 × 200 tick, più ogni scenario su 3 semi, ~1 minuto) controlla:
+invarianti, determinismo (un colpo contro lotti irregolari), che non tutti scoprano nello stesso ordine, che
+qualcuno scopra, che la diffusione non domini, che la perdita non sia troppo frequente, che nessun popolo
+diventi irrecuperabile, che le culture non convergano. Esito con questa milestone: **tutti superati** — 0% di
+run con un solo ordine di scoperta, 1459 scoperte e 502 acquisizioni per diffusione, perdite al 3% delle
+acquisizioni, un popolo sopra l'85% della popolazione nel 2% dei run. Esce con codice 1 solo se si rompe una
+garanzia; gli odori di bilanciamento sono avvisi. Una versione ridotta degli stessi controlli è nella suite
+`test:simulation`.
+
+Medie per scenario (3 semi × 200 tick):
+
+| Scenario       | Popolazione | Tecniche (max) | Diffusione | Guerre | Fusioni |
+| -------------- | ----------: | -------------: | ---------: | -----: | ------: |
+| baseline       |         589 |            6,0 |        4,0 |    5,0 |       0 |
+| fertile-valley |       1.136 |            7,3 |       12,7 |   19,3 |       0 |
+| desert         |         122 |            4,3 |        0,0 |    0,7 |       0 |
+| island         |         388 |            6,0 |        5,0 |    7,0 |       0 |
+| trade-corridor |       1.068 |            7,3 |       14,3 |   26,7 |       0 |
+| tech-diffusion |       1.003 |            7,0 |       23,0 |   47,3 |       0 |
+| fusion-prone   |       1.088 |            7,0 |       16,3 |   28,0 |       0 |
+| isolated       |         515 |            6,7 |        0,7 |    0,3 |       0 |
+
 ## Prestazioni
+
+Il tick si può profilare fase per fase senza cambiarne i risultati (`RunOptions.profile`; un test verifica
+che l'hash del mondo sia identico con e senza). Ogni batch registra le fasi in `phasesMs` nel log
+`simulate.batch`, quello che Vercel Observability raccoglie. Su 300 tick, mappa 64×64, ~3 ms per tick: clima e
+risorse 22%, guida e azioni 15%, insediamenti 13,4%, produzione e consumo 9,2%, nascite 7,1%, chiusura del
+tick 6,7%, tecnologia 5,7%, diplomazia 5,3%, morti ed epidemie 4,7%, cultura e stabilità 4,1%; le fasi
+introdotte da questa milestone (resilienza, credenze, conoscenza, accordi) pesano insieme il **5,2%**.
 
 Misure su ambiente di sviluppo locale (PGlite, Node 22), mappa 48×48:
 
@@ -1423,9 +1516,10 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
    riscoperta. Misure su 5 semi × 250 tick, mappa 64×64: i set tecnologici distinti fra popoli vivi passano da
    **1 a 4–8**, gli ordini di scoperta distinti da **1–3 a 4–10** e il tetto raggiunto da **5 a 8** tecnologie
    (16–17 su 600 tick). _Limiti_: la **riscoperta è rara nelle partite standard** (0–1 casi su 600 tick),
-   perché quasi tutte le perdite colpiscono popoli che poi si estinguono; le **varianti locali** (nome e
-   descrizione della tecnica adattati al luogo) **non sono implementate**: `localName` non esiste. Il catalogo
-   resta di 24 tecnologie e non copre l'età classica, medievale, moderna o industriale.
+   perché quasi tutte le perdite colpiscono popoli che poi si estinguono. Le **varianti locali** esistono
+   (9 forme per 7 tecniche, vedi «Varianti locali»): il 23% delle tecniche che ne ammettono una è praticato
+   in forma locale, ma 2 varianti su 9 (pesca di fiume, canali di bonifica) non sono comparse nelle misure.
+   Il catalogo resta di 22 tecnologie e non copre l'età classica, medievale, moderna o industriale.
 1. **Identità dell'età moderna** — _implementate_: 10 identità (Francesi, Inglesi, Spagnoli, Portoghesi,
    Ottomani, Italiani, Tedeschi, Russi, Etiopi, Statunitensi) come sandbox culturali. Mancano altre identità
    moderne e la categoria `regional` è vuota.
@@ -1506,16 +1600,35 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
     con filtri e paginazione, tecnologie raggiungibili, storia di una tecnologia, memoria di un luogo), tutti
     con contratto Zod verificato in uscita, catalogo statico costruito una volta per istanza e nessuna query
     per riga. In interfaccia: dinastia, credenze, resilienza, reputazione e accordi nella scheda del popolo;
-    memoria del luogo nella scheda dell'insediamento. _Limiti_: **non esiste il filtraggio per civiltà
-    osservatrice** — ogni endpoint mostra tutto a chiunque, perché senza `CivilizationKnowledge` non c'è un
-    modello di ciò che un popolo sa degli altri; e **non esiste una scheda tecnologica globale** con la
-    velocità di diffusione disegnata.
-20. **Non implementati**, nonostante siano stati progettati: esplorazione, spionaggio e informazione incompleta
-    (`CivilizationKnowledge`, fog of war); varianti locali delle tecniche (`localName`); harness di scenari
-    riproducibili (`simulation:run --scenario`, `simulation:compare`); pannello UI «Perché è successo?». La
-    **causalità** esiste già a livello di dato (`causeEventIds` su ogni evento, in memoria e in database) ma
-    non è ancora esposta né come replay né come pannello.
-21. La **cultura emergente** è passata a 13 tratti, con l'aggiunta di `tolerance`, `exploration`,
+    memoria del luogo nella scheda dell'insediamento; «Tecnologie del mondo» (menu) con chi ha scoperto,
+    preso e perso ogni tecnica. _Limiti_: il **filtraggio per osservatore riguarda solo ciò che un popolo sa
+    degli altri** (`/knowledge`, e i vicini visti in `/discoverable`): la mappa e le schede restano la vista
+    del narratore onnisciente, com'è giusto in un gioco d'osservazione, ma non esiste una modalità «gioca
+    come questo popolo»; la **velocità di diffusione** è mostrata come anni fra primo e ultimo possessore, non
+    come curva disegnata. L'interfaccia è stata verificata via HTTP sull'app in esecuzione e con i test, **non
+    con un browser**: nessuna schermata è stata controllata a occhio.
+20. **Informazione incompleta** — _implementata e misurata_: ogni popolo tiene stime (mai la verità) degli
+    altri, con fiducia, anno e fonte; le stime invecchiano e possono essere sbagliate. La **decisione di
+    dichiarare guerra usa la stima**, la battaglia la realtà: su 12 semi × 300 tick il 41% delle guerre
+    nasce da una stima troppo ottimista e l'attaccante perde il 39% delle battaglie contro il 35% di prima.
+    _Limiti_: solo guerra e movente leggono le stime; commercio, accordi, vassallaggi e occupazioni decidono
+    ancora sulla verità. Non esiste una **mappa esplorata** per popolo (fog of war sulla mappa): conta solo il
+    «dove li ho visti l'ultima volta». Gli **informatori** e le **stime delle risorse** non sono modellati.
+    Lo spionaggio vale il 6–8% degli eventi di importanza ≥3 quando è a importanza 3, e per questo è stato
+    abbassato a 2.
+21. **Causalità** — _implementata e misurata_: gli eventi di importanza ≥4 con cause registrate passano dal
+    **9% al 36%** (3 semi × 500 tick); ogni causa citata esiste ed è precedente. La catena si risale nel
+    database, non più solo nella pagina di cronaca visibile. _Limiti_: le categorie rimaste senza causa sono
+    soprattutto quelle che non hanno un evento-causa (epidemie, invenzioni, prime fondazioni) e sono spiegate
+    dai metadata; il **replay** (ripartire da uno snapshot e rigiocare) **non è implementato**: il
+    determinismo è verificato, ma non esiste uno strumento che lo usi per ricostruire la storia.
+22. **Scenari e stress** — _implementati_: 13 scenari riproducibili e tre comandi senza database. Su 20 semi ×
+    3 dimensioni × 200 tick tutti i controlli richiesti passano (vedi «Scenari e stress»). _Limiti_: **anche
+    lo scenario più favorevole alle fusioni ne produce 0** e vi si contano 28 guerre in 200 anni; il deserto
+    e l'isolamento si comportano come previsto, ma lo scenario «isolato» non produce percorsi tecnologici
+    più diversi della baseline (3,4 set distinti contro 3,2), perché i popoli si dividono e le bande figlie
+    restano vicine alle madri.
+23. La **cultura emergente** è passata a 13 tratti, con l'aggiunta di `tolerance`, `exploration`,
     `administrativeCapacity` e `culturalCohesion`, e ogni popolo tiene un registro limitato delle proprie
     variazioni. La convergenza culturale è stata **misurata e corretta** (deviazione standard fra popoli vivi
     dopo 400 tick: cooperazione da ±2,6 a ±11,5, tradizionalismo da ±1,8 a ±6,4, innovazione da ±4,0 a ±8,2),
@@ -1540,16 +1653,10 @@ Trade-off noti che restano validi:
 
 In ordine di priorità (il database è stato reso affidabile prima di estendere le funzionalità):
 
-0. **Completare la milestone «civiltà vive»**, nell'ordine in cui le parti dipendono l'una dall'altra:
-   varianti locali delle tecniche (`localName`, `localDescription`); registro delle variazioni culturali e
-   quattro tratti mancanti; guerra civile e frammentazione come esiti di una crisi di successione, matrimoni
-   dinastici; conversione missionaria attiva, scismi e clero come specialisti; accordi diplomatici espliciti e
-   reputazione; esplorazione, spionaggio e informazione incompleta con filtraggio delle API per civiltà
-   osservatrice; profilo di resilienza; endpoint e pannelli per tecnologie, dinastie, credenze, storia dei
-   luoghi, storia causale e replay (i dati esistono già: manca l'interfaccia).
-   Va aggiunto inoltre un **harness di scenari senza database** (`simulation:run --scenario`,
-   `simulation:compare`) per misurare valle fertile, deserto, isola, corridoio commerciale e mondo isolato:
-   oggi il bilanciamento tecnologico è misurato con script ad hoc, non con scenari riproducibili nel repo.
+0. **Chiudere la milestone «civiltà vive»**: far decidere sulle stime anche commercio, accordi e
+   vassallaggi; mappa esplorata per popolo; guerra civile e frammentazione come esiti di una crisi di
+   successione, matrimoni dinastici; conversione missionaria attiva, scismi e clero; replay da snapshot;
+   verifica visiva dell'interfaccia nel browser (oggi verificata solo via HTTP e test).
 1. **Catalogo**: estendere le identità reali (Oceania, Africa subsahariana, Asia centrale e sudorientale,
    Americhe) e popolare la categoria `regional`.
 2. **Età moderna**: altre identità moderne selezionabili, sempre con partenza uniforme e senza modificatori.

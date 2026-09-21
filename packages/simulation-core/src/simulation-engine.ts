@@ -1,7 +1,7 @@
 import { applyActionEffects, assignRole, chooseAction, type CommunityNeeds } from "./agents";
 import { averageTemperature, climateStress, definingSeason, hazardsAt, updateClimate } from "./climate";
 import { ECONOMY } from "./constants";
-import { buildIndexes, emptyCounters, type Community, type SimContext } from "./context";
+import { buildIndexes, emptyCounters, mark, type Community, type SimContext } from "./context";
 import { expireCrises, tryRevolt, updateEpidemics } from "./crises";
 import {
   culturalDistance,
@@ -11,6 +11,8 @@ import {
   updateStability,
 } from "./culture";
 import { updateAgreements } from "./agreements";
+import { anchor, causesFrom } from "./causality";
+import { updateKnowledge } from "./knowledge";
 import { beliefContextOf, beliefEffects, updateBeliefs, type BeliefContext } from "./belief";
 import { chooseCrisisResponse, computeResilience, overallResilience, resilienceInputOf } from "./resilience";
 import { updateSettlementHistory } from "./settlement-history";
@@ -65,7 +67,16 @@ export interface RunOptions {
   now?: () => number;
   /** Runs the integrity checks after every tick (development and tests). */
   checkInvariants?: boolean;
+  /**
+   * Accumulates milliseconds spent in each phase of the tick into this object (summed over the
+   * batch). Timing only: it reads the clock, never the simulation state or its RNG.
+   */
+  profile?: Record<string, number>;
 }
+
+/** High-resolution clock where available; phases of a tick last well under a millisecond. */
+const performanceNow = () =>
+  typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now();
 
 export function createContext(state: WorldState): SimContext {
   const ctx: SimContext = {
@@ -90,6 +101,7 @@ export function createContext(state: WorldState): SimContext {
 export function runSimulation(state: WorldState, ticks: number, options: RunOptions = {}): SimulationResult {
   const ctx = createContext(state);
   const now = options.now ?? Date.now;
+  if (options.profile) ctx.profile = { now: performanceNow, last: performanceNow(), phases: options.profile };
   const stats: TickStats[] = [];
   const civStats: CivilizationStats[] = [];
   let ticksRun = 0;
@@ -258,6 +270,7 @@ export function runTick(ctx: SimContext) {
   regenerateResources(state);
   buildCommunities(ctx);
   computeThreat(ctx);
+  mark(ctx, "clima e risorse");
 
   // 3-4. Leadership, roles and actions.
   const households = householdMap(ctx);
@@ -280,6 +293,8 @@ export function runTick(ctx: SimContext) {
       applyActionEffects(p, p.action);
     }
   }
+
+  mark(ctx, "guida e azioni");
 
   // 5-6. Production, consumption, hunger and health.
   for (const tribe of state.tribes) {
@@ -316,6 +331,8 @@ export function runTick(ctx: SimContext) {
     }
   }
 
+  mark(ctx, "produzione e consumo");
+
   // 7. Couples and births.
   const population = state.people.length;
   const cap = state.settings.populationSoftCap;
@@ -337,6 +354,8 @@ export function runTick(ctx: SimContext) {
     }
     c.members.push(...newborns);
   }
+
+  mark(ctx, "nascite");
 
   // 8. Ageing, natural deaths, starvation and epidemics.
   for (const c of ctx.communities) {
@@ -362,6 +381,8 @@ export function runTick(ctx: SimContext) {
     c.members = c.members.filter((p) => p.alive);
   }
 
+  mark(ctx, "morti ed epidemie");
+
   // 9. Migration, band splits and absorption of tiny groups.
   const relationships = new Map(state.relationships.map((r) => [r.id, r]));
   for (const c of ctx.communities) {
@@ -373,6 +394,8 @@ export function runTick(ctx: SimContext) {
     const members = ctx.communities.filter((c) => c.tribe.id === tribe.id).flatMap((c) => c.members);
     joinNearbyGroup(ctx, tribe, members, relationships);
   }
+
+  mark(ctx, "migrazioni");
 
   // 10. Settlements: foundation, construction, upkeep, colonies, collapse.
   for (const c of ctx.communities) {
@@ -399,6 +422,8 @@ export function runTick(ctx: SimContext) {
   refreshSettlements(ctx);
   updateTerritory(ctx);
 
+  mark(ctx, "insediamenti");
+
   // 11. Technology, research and adoption.
   buildCommunities(ctx);
   for (const tribe of tribesAlive(ctx)) {
@@ -418,8 +443,12 @@ export function runTick(ctx: SimContext) {
     });
   }
 
+  mark(ctx, "tecnologia");
+
   // 12. Culture, government and internal stability.
   updateSociety(ctx);
+
+  mark(ctx, "cultura e stabilità");
 
   // 12a. How well each people would take a blow, recomputed from what it actually has.
   for (const tribe of tribesAlive(ctx)) {
@@ -427,6 +456,8 @@ export function runTick(ctx: SimContext) {
     if (comms.length === 0) continue;
     tribe.resilience = computeResilience(tribe, resilienceInputOf(ctx, tribe, comms), state.tick);
   }
+
+  mark(ctx, "resilienza");
 
   // 12b. Systems of belief: they appear, take hold, blend and fade (belief.ts).
   const beliefContexts = new Map<string, BeliefContext>();
@@ -438,21 +469,31 @@ export function runTick(ctx: SimContext) {
   }
   updateBeliefs(ctx, beliefContexts);
 
+  mark(ctx, "credenze");
+
   // 13-14. Relations: trade, knowledge, raids, wars, peace.
   computeThreat(ctx);
   const profiles = buildProfiles(ctx);
   updateDiplomacy(ctx, profiles);
+  mark(ctx, "diplomazia");
   // 13b. Explicit pacts and the record each people builds by keeping or breaking them.
   updateAgreements(ctx, profiles);
+  mark(ctx, "accordi");
+  // 13c. What each people learns — and gets wrong — about the others (knowledge.ts).
+  updateKnowledge(ctx, profiles);
+  mark(ctx, "conoscenza");
   // 14b. Explicit political relations: occupations and vassals (politics.ts).
   updatePolitics(ctx, profiles);
   // 14c. Peoples bound for decades by alliance or integration may fuse (fusion.ts).
   updateFusions(ctx, profiles);
 
+  mark(ctx, "politica e fusioni");
+
   // 15-16. Crises, bookkeeping, extinction, civilizations, milestones.
   expireCrises(ctx);
   finalizeTick(ctx);
   cleanupPolitics(ctx);
+  mark(ctx, "chiusura del tick");
 }
 
 /** Step 12: culture drift, form of government, stability and internal unrest. */
@@ -603,7 +644,7 @@ function famineEvent(ctx: SimContext, c: Community) {
         }),
       })
     : null;
-  emitEvent(ctx, {
+  const famine = emitEvent(ctx, {
     type: "famine",
     subtype: hazards[0]?.kind ?? "shortage",
     importance: 3,
@@ -643,6 +684,9 @@ function famineEvent(ctx: SimContext, c: Community) {
     },
     causeEventIds: hazards.map((h) => h.eventId).filter((id): id is string => Boolean(id)),
   });
+  // Revolts, collapses and losses that follow can name this famine as their cause.
+  anchor(c.tribe, "famine", famine);
+  if (c.settlement) anchor(c.tribe, `famine:${c.settlement.id}`, famine);
 }
 
 function friendlyTribes(ctx: SimContext): Map<string, Set<string>> {
@@ -737,6 +781,15 @@ function finalizeTick(ctx: SimContext) {
           years: state.year - tribe.foundedYear,
           technologies: tribe.techs.length,
         },
+        // What finished them off: the latest famine, collapse or war still fresh in memory.
+        causeEventIds: causesFrom(state.year, [
+          [tribe, "collapse", 30],
+          [tribe, "famine", 30],
+          ...Object.keys(tribe.causalAnchors ?? {})
+            .filter((key) => key.startsWith("war:"))
+            .sort()
+            .map((key) => [tribe, key, 30] as const),
+        ]),
       });
       for (const rel of state.relationships) {
         if (rel.aId === tribe.id || rel.bId === tribe.id) {

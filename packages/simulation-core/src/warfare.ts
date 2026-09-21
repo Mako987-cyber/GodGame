@@ -1,3 +1,4 @@
+import { causesFrom, warKey } from "./causality";
 import { AGE } from "./constants";
 import type { Community, SimContext } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
@@ -280,6 +281,11 @@ export function wageConflict(ctx: SimContext, input: ConflictInput) {
       defenderId: defender.id,
       warStartYear: relationship.warStartYear,
     },
+    // A battle is fought inside a war: it names the declaration as its cause.
+    causeEventIds: causesFrom(ctx.state.year, [
+      [attacker, warKey(defender.id)],
+      [defender, warKey(attacker.id)],
+    ]),
   });
 
   onBattleResolved(ctx, winner, loser);

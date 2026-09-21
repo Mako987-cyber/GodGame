@@ -1,3 +1,4 @@
+import { causesFrom } from "./causality";
 import { AGE, GOVERNMENTS } from "./constants";
 import { nextId, type SimContext } from "./context";
 import { actor, describePlace, emitEvent } from "./events";
@@ -332,6 +333,14 @@ function installLeader(
       outcome,
       successionLaw: successionLawOf(tribe),
     },
+    // A succession follows the death of the ruler before, or the revolt that removed him.
+    causeEventIds:
+      reason === "foundation"
+        ? []
+        : causesFrom(ctx.state.year, [
+            [tribe, "leader_death", 3],
+            [tribe, "revolt", 5],
+          ]),
   });
 }
 
@@ -574,6 +583,11 @@ export function endDynasty(
       reason,
       status: dynasty.status,
     },
+    causeEventIds: causesFrom(ctx.state.year, [
+      [tribe, "leader_death", 3],
+      [tribe, "revolt", 10],
+      [tribe, "collapse", 30],
+    ]),
   });
   return true;
 }
@@ -691,6 +705,7 @@ function successionCrisis(
       legitimacy: tribe.stability.legitimacy,
       cause,
     },
+    causeEventIds: causesFrom(ctx.state.year, [[tribe, "leader_death", 3]]),
   });
 }
 

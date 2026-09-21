@@ -10,6 +10,7 @@ import {
   ScrollText,
   Trash2,
   BarChart3,
+  FlaskConical,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Menu } from "@/components/ui/menu";
@@ -23,6 +24,7 @@ export function WorldMenu({
   onSnapshot,
   onChronicle,
   onStats,
+  onTechnologies,
   onDelete,
 }: {
   onMapSettings: () => void;
@@ -32,6 +34,7 @@ export function WorldMenu({
   onSnapshot: () => void;
   onChronicle: () => void;
   onStats: () => void;
+  onTechnologies: () => void;
   onDelete: () => void;
 }) {
   const router = useRouter();
@@ -48,6 +51,12 @@ export function WorldMenu({
         { id: "info", label: "Informazioni sul mondo", icon: <Info />, onSelect: onInfo },
         { id: "chronicle", label: "Cronaca completa", icon: <ScrollText />, onSelect: onChronicle },
         { id: "stats", label: "Statistiche", icon: <BarChart3 />, onSelect: onStats },
+        {
+          id: "technologies",
+          label: "Tecnologie del mondo",
+          icon: <FlaskConical />,
+          onSelect: onTechnologies,
+        },
         { id: "map", label: "Impostazioni mappa", icon: <Layers />, onSelect: onMapSettings },
         {
           id: "debug",

@@ -47,6 +47,20 @@ export interface SimContext {
   communities: Community[];
   /** Deduplication index of the events emitted during the current tick. */
   emitted: Map<string, HistoricalEvent>;
+  /**
+   * Per-phase timing, only when a caller asked for it (`RunOptions.profile`). Absent in normal
+   * runs, so measuring costs nothing unless it is wanted — and it never touches the simulation.
+   */
+  profile?: { now: () => number; last: number; phases: Record<string, number> };
+}
+
+/** Closes the current phase of the tick under `name`. A no-op unless profiling is on. */
+export function mark(ctx: SimContext, name: string) {
+  const profile = ctx.profile;
+  if (!profile) return;
+  const at = profile.now();
+  profile.phases[name] = (profile.phases[name] ?? 0) + (at - profile.last);
+  profile.last = at;
 }
 
 export function emptyCounters(): TickCounters {

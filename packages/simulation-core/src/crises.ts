@@ -1,3 +1,4 @@
+import { anchor, causesFrom } from "./causality";
 import { HOUSING } from "./constants";
 import type { Community, SimContext } from "./context";
 import { actor, describePlace, emitEvent, pluralPeople } from "./events";
@@ -258,7 +259,7 @@ export function tryRevolt(ctx: SimContext, community: Community): boolean {
     if (victim) killPerson(ctx, victim, "conflict");
   }
   community.stock.food = round(community.stock.food * 0.85, 2);
-  emitEvent(ctx, {
+  const revolt = emitEvent(ctx, {
     type: "unrest",
     subtype: "revolt",
     importance: 4,
@@ -287,7 +288,10 @@ export function tryRevolt(ctx: SimContext, community: Community): boolean {
       distribution: tribe.distribution,
       government: tribe.government,
     },
+    // Hunger is the commonest root of a revolt: a recent famine is named as its cause.
+    causeEventIds: causesFrom(ctx.state.year, [[tribe, "famine", 8]]),
   });
+  anchor(tribe, "revolt", revolt);
   return true;
 }
 

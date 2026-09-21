@@ -238,6 +238,8 @@ export interface Tribe {
    * forever: it is what makes a rediscovery cheaper and what the chronicle reads back.
    */
   techLost: Record<string, number>;
+  /** techId -> key of the local variant this people practises (see tech-variants.ts). */
+  techVariants: Record<string, string>;
   yearsAtLocation: number;
   scarcityYears: number;
   foundedYear: number;
@@ -280,6 +282,11 @@ export interface Tribe {
    * the engine reads it back as memory. `null` before the first tick of a loaded world.
    */
   resilience: ResilienceProfile | null;
+  /**
+   * Last event of a few kinds that shaped this people (`war:<other>`, `famine`, `collapse`,
+   * `leader_death`, `revolt`), so later events can name it as their cause. See causality.ts.
+   */
+  causalAnchors: Record<string, { eventId: string; year: number }>;
 }
 
 /**
@@ -658,7 +665,48 @@ export interface DiplomaticReputation {
   updatedAtTick: number;
 }
 
+// --- Incomplete information ------------------------------------------------------------------
+//
+// What one people believes about another. Never the truth: an estimate with a confidence, a
+// year and a source, which ages and can simply be wrong. One compact record per ordered pair
+// (observer, target) that has ever been in contact — not one row per fact per year.
+
+export type KnowledgeSource = "exploration" | "trade" | "diplomat" | "spy" | "battle" | "rumor";
+
+export interface KnowledgeEstimate {
+  /** What the observer believes the value is. May be far from the real one. */
+  value: number;
+  /** How much the observer trusts it, 0..1. Decays every year it is not refreshed. */
+  confidence: number;
+  /** Year it was last refreshed. */
+  year: number;
+  source: KnowledgeSource;
+}
+
+export interface CivilizationKnowledge {
+  /** Who knows. */
+  observerId: string;
+  /** Who is known about. */
+  targetId: string;
+  /** Where the observer last saw them. */
+  location: { x: number; y: number; year: number } | null;
+  population: KnowledgeEstimate | null;
+  /** Fighting strength, in the same units as `sidePower`. */
+  military: KnowledgeEstimate | null;
+  /** Internal order, 0..1. */
+  stability: KnowledgeEstimate | null;
+  /** Technologies the observer has seen them use. A subset of the truth, never a superset. */
+  technologies: { ids: string[]; confidence: number; year: number; source: KnowledgeSource } | null;
+  /** Whether the observer believes they mean harm. */
+  intent: { hostile: boolean; confidence: number; year: number; source: KnowledgeSource } | null;
+  /** Spying attempts against this target, and how many were caught. */
+  spyAttempts: number;
+  spiesCaught: number;
+  updatedYear: number;
+}
+
 export type EventType =
+  | "intelligence"
   | "agreement"
   | "belief"
   | "vassalage"
@@ -999,6 +1047,8 @@ export interface WorldState {
   agreements: DiplomaticAgreement[];
   /** One record per political instance that has ever had dealings with anyone. */
   reputations: DiplomaticReputation[];
+  /** What each people believes about the others it has met (empty in older worlds). */
+  knowledge: CivilizationKnowledge[];
   /** Explicit political relations and fusions (empty in worlds created before they existed). */
   vassalages: VassalRelationship[];
   occupations: Occupation[];

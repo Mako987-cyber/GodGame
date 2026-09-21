@@ -116,6 +116,8 @@ export interface TribeDTO {
   techAdoption: Record<string, number>;
   /** techId -> year it was lost; a rediscovery removes the entry. */
   techLost: Record<string, number>;
+  /** techId -> key of the local form of the technique. */
+  techVariants: Record<string, string>;
   culture: CultureTraits;
   /** The last notable cultural shifts, oldest first. */
   cultureHistory: CultureChangeRecord[];

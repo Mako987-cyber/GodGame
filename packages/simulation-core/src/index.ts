@@ -95,6 +95,59 @@ export {
   type ResilienceInput,
   type ResilienceProfile,
 } from "./resilience";
+export {
+  KNOWLEDGE_DECAY,
+  KNOWLEDGE_FORGET,
+  KNOWLEDGE_SOURCE_LABELS,
+  MAX_ESTIMATE_ERROR,
+  SIGHT_DISTANCE,
+  ageKnowledge,
+  attemptEspionage,
+  emptyKnowledge,
+  estimate,
+  knowledgeIndex,
+  knowledgeKey,
+  perceivedPower,
+  refreshKnowledge,
+  spyEffort,
+  spySuccessChance,
+  truthOf,
+  updateKnowledge,
+  viewOf,
+  wantsToSpy,
+  type ContactChannels,
+  type KnowledgeTruth,
+  type KnowledgeView,
+} from "./knowledge";
+export {
+  ANCHOR_MAX_AGE,
+  MAX_ANCHORS,
+  anchor,
+  anchored,
+  causesFrom,
+  releaseAnchor,
+  warKey,
+  type CausalAnchor,
+} from "./causality";
+export { TECH_VARIANTS, localTechName, variantByKey, variantFor, type TechVariant } from "./tech-variants";
+export {
+  SCENARIOS,
+  SCENARIO_NAMES,
+  buildScenario,
+  isScenarioName,
+  relocateTribe,
+  type ScenarioDefinition,
+  type ScenarioName,
+} from "./scenarios";
+export {
+  checkDeterminism,
+  checkRuns,
+  measureRun,
+  runAndMeasure,
+  type CheckResult,
+  type CheckSeverity,
+  type RunMetrics,
+} from "./scenario-metrics";
 export * from "./placement";
 export * from "./politics";
 export * from "./fusion";

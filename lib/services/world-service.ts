@@ -365,6 +365,7 @@ export async function getWorldDetailService(
         techProgress: t.techProgress,
         techAdoption: t.techAdoption ?? {},
         techLost: t.techLost ?? {},
+        techVariants: t.techVariants ?? {},
         cultureHistory: t.cultureHistory ?? [],
         resilience: t.resilience ?? null,
         beliefAdherence: t.beliefAdherence ?? 0,
@@ -996,7 +997,13 @@ export async function simulateWorldService(
     const populationBefore = loaded.state.people.length;
     const loadedAt = Date.now();
 
-    const result = runSimulation(loaded.state, ticks, { deadline: started + config.timeBudgetMs });
+    // Per-phase timing of the tick, summed over the batch: it lands in the structured log below,
+    // which is what Vercel Observability collects. Reading the clock never alters the simulation.
+    const phases: Record<string, number> = {};
+    const result = runSimulation(loaded.state, ticks, {
+      deadline: started + config.timeBudgetMs,
+      profile: phases,
+    });
     const computedAt = Date.now();
     if (result.ticksRun === 0)
       throw new AppError("TIMEOUT", "Tempo di calcolo esaurito prima di completare un tick");
@@ -1039,6 +1046,7 @@ export async function simulateWorldService(
       saveMs: Date.now() - computedAt,
       msPerTick: result.ticksRun > 0 ? Math.round(((computedAt - loadedAt) / result.ticksRun) * 10) / 10 : 0,
       durationMs,
+      phasesMs: Object.fromEntries(Object.entries(phases).map(([k, v]) => [k, Math.round(v * 10) / 10])),
     });
     await recordSimulationRun(db, {
       worldId,

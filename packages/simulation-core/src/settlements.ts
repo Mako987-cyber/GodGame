@@ -1,3 +1,4 @@
+import { anchor, causesFrom } from "./causality";
 import {
   AGE,
   BUILDINGS,
@@ -838,10 +839,12 @@ export function checkCollapse(ctx: SimContext, community: Community) {
       epidemic,
       buildingsLost: Object.values(s.buildings).reduce((a, b) => a + b, 0),
     },
-    causeEventIds: ctx.state.crises
-      .filter((c) => c.targetId === s.id && c.eventId)
-      .map((c) => c.eventId as string),
+    causeEventIds: [
+      ...ctx.state.crises.filter((c) => c.targetId === s.id && c.eventId).map((c) => c.eventId as string),
+      ...causesFrom(ctx.state.year, [[tribe, `famine:${s.id}`, 6]]),
+    ].filter((id, i, all) => all.indexOf(id) === i),
   });
+  anchor(tribe, "collapse", collapseEvent);
   // The place is abandoned, not erased: what it was stays on its own record.
   recordDestruction(s, collapseEvent.id.length > 0 ? collapseEvent.id : null);
 }
@@ -1093,6 +1096,7 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     techProgress: { ...parent.techProgress },
     techAdoption: { ...parent.techAdoption },
     techLost: { ...parent.techLost },
+    techVariants: { ...parent.techVariants },
     foundedYear: ctx.state.year,
     extinctYear: null,
     civilizationId: null,
@@ -1114,6 +1118,7 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     beliefAdherence: 0,
     cultureHistory: [],
     resilience: null,
+    causalAnchors: {},
   };
   // The new polity drifts culturally from the parent right away.
   tribe.culture.centralization = clamp(tribe.culture.centralization - 10, 5, 95);

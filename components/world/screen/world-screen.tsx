@@ -15,6 +15,7 @@ import { WorldStatistics } from "../world-statistics";
 import { WorldTimeline } from "../world-timeline";
 import { EventLog, useNotifications } from "./event-log";
 import { OverviewPanel } from "./overview-panel";
+import { TechnologyAtlas } from "../technology-atlas";
 import { placeOfSelection, SelectionPanel } from "./selection-panel";
 import { SpeedControls, type Step } from "./speed-controls";
 import { TopHud } from "./top-hud";
@@ -132,7 +133,7 @@ export function WorldScreen({ initial }: { initial: WorldDetail }) {
   const focusNonce = ui.focus?.nonce;
   const { panel, closePanel } = ui;
   useEffect(() => {
-    if (focusNonce && (panel === "chronicle" || panel === "stats")) closePanel();
+    if (focusNonce && (panel === "chronicle" || panel === "stats" || panel === "technologies")) closePanel();
     // Only a new focus request closes the panel, not opening it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusNonce]);
@@ -221,6 +222,7 @@ export function WorldScreen({ initial }: { initial: WorldDetail }) {
             onSnapshot={() => setDialog("snapshot")}
             onChronicle={() => ui.togglePanel("chronicle")}
             onStats={() => ui.togglePanel("stats")}
+            onTechnologies={() => ui.togglePanel("technologies")}
             onDelete={openDelete}
           />
         }
@@ -261,6 +263,15 @@ export function WorldScreen({ initial }: { initial: WorldDetail }) {
             civilizations={detail.civilizations.map((c) => ({ id: c.id, name: c.name, color: c.color }))}
           />
         )}
+      </Dialog>
+      <Dialog
+        open={ui.panel === "technologies"}
+        onClose={ui.closePanel}
+        title="Tecnologie del mondo"
+        description="Chi ha scoperto cosa, chi l'ha presa, chi l'ha persa."
+        className="w-[min(1100px,calc(100vw-2rem))]"
+      >
+        {ui.panel === "technologies" && <TechnologyAtlas detail={detail} />}
       </Dialog>
       <WorldInfoDialog
         detail={detail}

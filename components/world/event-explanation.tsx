@@ -1,5 +1,8 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { api, queryKeys } from "@/lib/client/api";
 import type { EventDTO, WorldDetail } from "@/lib/dto";
 import {
   BUILDING_LABELS,
@@ -16,6 +19,51 @@ import {
   metaText,
 } from "@/lib/client/format";
 
+const BELIEF_TYPES: Record<string, string> = {
+  ancestor_veneration: "culto degli antenati",
+  nature_spirituality: "spiritualità della natura",
+  river_cult: "culto del fiume",
+  solar_cult: "culto solare",
+  mountain_cult: "culto della montagna",
+  pantheon: "pantheon",
+  imperial_cult: "culto dello stato",
+  philosophical: "scuola filosofica",
+  syncretic: "sincretismo",
+};
+const beliefLabel = (t: string) => BELIEF_TYPES[t] ?? t;
+
+const OUTCOMES: Record<string, string> = {
+  peaceful: "pacifica",
+  regency: "con reggenza",
+  disputed: "contesa",
+  usurpation: "per usurpazione",
+  interregnum: "con interregno",
+};
+const outcomeLabel = (o: string) => OUTCOMES[o] ?? o;
+
+const DYNASTY_ENDS: Record<string, string> = {
+  no_heir: "senza eredi",
+  usurpation: "spodestata",
+  extinct_people: "estinta con il suo popolo",
+  merged: "confluita in un altro popolo",
+  reform: "abolita da una riforma",
+};
+const dynastyEndLabel = (r: string) => DYNASTY_ENDS[r] ?? r;
+
+const RESPONSES: Record<string, string> = {
+  rationing: "razionamento",
+  migration: "migrazione",
+  trade: "ricorso al commercio",
+  reform: "riforma",
+  repression: "repressione",
+  redistribution: "redistribuzione",
+  colonisation: "colonizzazione",
+  war: "guerra",
+  appeal_for_help: "richiesta d'aiuto",
+  abandon_settlement: "abbandono dell'insediamento",
+};
+const responseLabel = (r: string) => RESPONSES[r] ?? r;
+
 /**
  * "Perché è successo?": builds an explanation from the structured metadata the engine
  * attaches to every event. No language model involved — only templates over numbers.
@@ -31,6 +79,12 @@ function causeLines(event: EventDTO): string[] {
 
   switch (event.type) {
     case "famine": {
+      const response = text("response");
+      if (response) {
+        add(`Risposta scelta: ${responseLabel(response)} — ${metaText(m.responseReason) ?? ""}.`);
+        const resilience = num("resilience");
+        if (resilience !== null) add(`Resilienza del popolo in quel momento: ${fmtPct(resilience)}.`);
+      }
       const ratio = num("foodRatio");
       if (ratio !== null) add(`Il gruppo copriva solo il ${fmtPct(ratio)} del proprio fabbisogno.`);
       const stored = num("stored");
@@ -97,7 +151,67 @@ function causeLines(event: EventDTO): string[] {
         add(`Logistica sfavorevole all'attaccante (${fmtDec(logistics)}×).`);
       break;
     }
+    case "belief": {
+      if (event.subtype === "founded") {
+        add(metaText(m.type) ? `Forma assunta: ${beliefLabel(text("type") ?? "")}.` : null);
+        const spirituality = num("spirituality");
+        if (spirituality !== null)
+          add(`Spiritualità del popolo: ${fmtInt(spirituality)}/100, abbastanza da cercare una forma.`);
+        const population = num("population");
+        if (population !== null)
+          add(`Popolazione abbastanza numerosa da sostenerne i riti: ${fmtInt(population)}.`);
+        add("La forma nasce dalla terra e dalla storia del popolo, non dal suo nome storico.");
+      } else if (event.subtype === "syncretism") {
+        add("Due popoli vicini e indisturbati per una generazione, entrambi tolleranti.");
+        const tolerance = num("tolerance");
+        if (tolerance !== null) add(`Tolleranza della nuova credenza: ${fmtPct(tolerance)}.`);
+      } else if (event.subtype === "abandoned") {
+        add("L'adesione si è esaurita: fame e guerra hanno incrinato la fede.");
+      }
+      break;
+    }
+    case "agreement": {
+      if (event.subtype === "violated") {
+        add(metaText(m.reason) ? `Motivo: ${metaText(m.reason)}.` : null);
+        const years = num("years");
+        if (years !== null) add(`Il patto reggeva da ${fmtInt(years)} anni.`);
+        const respect = num("treatyRespect");
+        if (respect !== null) add(`Rispetto dei patti di chi l'ha rotto, dopo: ${fmtPct(respect)}.`);
+      } else {
+        const trust = num("trustAtStart");
+        if (trust !== null) add(`Fiducia fra le parti alla firma: ${fmtPct(trust)}.`);
+        const expires = num("expiresAtYear");
+        add(expires !== null ? `Scade nel ${fmtYear(expires)}.` : "Senza scadenza.");
+      }
+      break;
+    }
+    case "intelligence": {
+      const chance = num("successChance");
+      if (chance !== null) add(`Probabilità che la missione riuscisse: ${fmtPct(chance)}.`);
+      const attempts = num("attempts");
+      const caught = num("caught");
+      if (attempts !== null && caught !== null)
+        add(
+          `Missioni tentate finora contro questo popolo: ${fmtInt(attempts)}, scoperte: ${fmtInt(caught)}.`,
+        );
+      add("Una spia scoperta alza l'ostilità e abbassa la fiducia fra i due popoli.");
+      break;
+    }
     case "tech_discovered": {
+      if (event.subtype === "lost") {
+        const strain = num("strain");
+        if (strain !== null) add(`Pressione che ha impedito di tramandare la tecnica: ${fmtPct(strain)}.`);
+        const population = num("population");
+        if (population !== null) add(`Persone rimaste a praticarla: ${fmtInt(population)}.`);
+        if (m.settled === false) add("Il popolo non aveva più insediamenti dove esercitarla.");
+        add("La perdita è graduale: l'adozione è scesa anno dopo anno prima di sparire.");
+        break;
+      }
+      if (event.subtype === "rediscovery") {
+        const lost = num("lostYear");
+        if (lost !== null) add(`La tecnica era stata perduta nel ${fmtYear(lost)}.`);
+        add("Le tracce rimaste hanno reso il nuovo apprendimento più rapido del primo.");
+      }
       const method = text("method");
       add(
         method === "invention"
@@ -163,6 +277,36 @@ function causeLines(event: EventDTO): string[] {
       break;
     }
     case "leadership": {
+      if (event.subtype === "succession_crisis") {
+        add(metaText(m.cause) ? `Causa: ${metaText(m.cause)}.` : null);
+        const outcome = text("outcome");
+        if (outcome) add(`Esito: ${outcomeLabel(outcome)}.`);
+        const risk = num("risk");
+        if (risk !== null) add(`Rischio calcolato al momento della successione: ${fmtPct(risk)}.`);
+        const heirs = num("heirs");
+        if (heirs !== null) add(`Eredi idonei: ${fmtInt(heirs)}.`);
+        if (m.minorHeir === true) add("L'erede era ancora troppo giovane per regnare.");
+        if (m.suddenDeath === true)
+          add("Il sovrano è morto prima della vecchiaia: nulla era stato predisposto.");
+        break;
+      }
+      if (event.subtype === "dynasty_ended") {
+        const reason = text("reason");
+        if (reason) add(`Fine della casa: ${dynastyEndLabel(reason)}.`);
+        const rulers = num("rulers");
+        if (rulers !== null) add(`Sovrani dati: ${fmtInt(rulers)}.`);
+        const crises = num("crises");
+        if (crises !== null && crises > 0) add(`Crisi di successione attraversate: ${fmtInt(crises)}.`);
+        break;
+      }
+      if (event.subtype === "dynasty_restored") {
+        const away = num("yearsAway");
+        if (away !== null) add(`Anni lontana dal potere: ${fmtInt(away)}.`);
+        add("Un discendente della casa ha ripreso il posto: la storia della casa continua.");
+        break;
+      }
+      const outcome = text("outcome");
+      if (outcome && outcome !== "peaceful") add(`Successione ${outcomeLabel(outcome)}.`);
       const succession = text("succession");
       if (succession) add(`Regola di successione in vigore: ${successionLabel(succession)}.`);
       const prestige = num("prestige");
@@ -225,23 +369,45 @@ function successionLabel(kind: string): string {
 export function EventExplanation({
   event,
   detail,
-  causes,
-  onSelectCause,
 }: {
   event: EventDTO;
   detail: WorldDetail;
-  causes: EventDTO[];
-  onSelectCause: (id: string) => void;
+  /** Kept for callers that still pass it; navigation now happens inside the panel. */
+  onSelectCause?: (id: string) => void;
 }) {
-  const lines = causeLines(event);
-  const actors = event.actors.filter(
+  // The panel follows the chain on its own: a cause from fifty years earlier is not on the
+  // timeline page the player is looking at, so it cannot be "selected" there.
+  const [focusId, setFocusId] = useState(event.id);
+  const worldId = detail.world.id;
+  const chain = useQuery({
+    queryKey: queryKeys.causality(worldId, focusId),
+    queryFn: () => api.causality(worldId, focusId),
+    staleTime: Infinity,
+  });
+  const shown = chain.data?.event ?? event;
+  const lines = causeLines(shown);
+  const actors = shown.actors.filter(
     (a) => a.kind !== "person" || detail.notablePeople.some((p) => p.id === a.id),
   );
   return (
     <div className="border-line bg-raised/40 mt-2 grid gap-2 rounded-md border p-3 text-sm">
+      {focusId !== event.id && (
+        <button
+          type="button"
+          className="text-ochre justify-self-start text-xs underline-offset-4 hover:underline"
+          onClick={() => setFocusId(event.id)}
+        >
+          ← torna a «{event.title}»
+        </button>
+      )}
       <p className="text-muted text-xs">
-        {EVENT_LABELS[event.type] ?? event.type}
-        {event.subtype ? ` · ${event.subtype}` : ""} · {IMPORTANCE_LABELS[event.importance]}
+        {focusId !== event.id && (
+          <>
+            {fmtYear(shown.year)} — {shown.title} ·{" "}
+          </>
+        )}
+        {EVENT_LABELS[shown.type] ?? shown.type}
+        {shown.subtype ? ` · ${shown.subtype}` : ""} · {IMPORTANCE_LABELS[shown.importance]}
       </p>
       {lines.length > 0 ? (
         <ul className="grid list-disc gap-1 pl-4">
@@ -257,16 +423,39 @@ export function EventExplanation({
       {actors.length > 0 && (
         <p className="text-muted text-xs">Protagonisti: {actors.map((a) => a.name).join(", ")}</p>
       )}
-      {causes.length > 0 && (
+      {chain.isPending && <p className="text-muted text-xs">Ricostruzione della catena causale…</p>}
+      {chain.data && chain.data.causes.length > 0 && (
         <div>
           <p className="text-muted text-xs">Eventi che hanno portato a questo:</p>
           <ul className="grid gap-1">
-            {causes.map((c) => (
+            {chain.data.causes.map(({ event: c, depth }) => (
+              <li key={c.id} style={{ paddingLeft: `${(depth - 1) * 0.75}rem` }}>
+                <button
+                  type="button"
+                  className="text-parchment hover:text-ochre text-left underline-offset-4 hover:underline"
+                  onClick={() => setFocusId(c.id)}
+                >
+                  {depth > 1 && <span className="text-muted">↳ </span>}
+                  {fmtYear(c.year)} — {c.title}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {chain.data.truncated && (
+            <p className="text-muted mt-1 text-xs">La catena prosegue oltre: apri una causa per risalire.</p>
+          )}
+        </div>
+      )}
+      {chain.data && chain.data.consequences.length > 0 && (
+        <div>
+          <p className="text-muted text-xs">Che cosa ne è seguito:</p>
+          <ul className="grid gap-1">
+            {chain.data.consequences.map((c) => (
               <li key={c.id}>
                 <button
                   type="button"
                   className="text-parchment hover:text-ochre text-left underline-offset-4 hover:underline"
-                  onClick={() => onSelectCause(c.id)}
+                  onClick={() => setFocusId(c.id)}
                 >
                   {fmtYear(c.year)} — {c.title}
                 </button>
