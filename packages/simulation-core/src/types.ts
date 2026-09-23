@@ -319,7 +319,9 @@ export type SuccessionOutcome =
   /** Someone outside the line took the throne. */
   | "usurpation"
   /** No successor at all: the seat stayed empty. */
-  | "interregnum";
+  | "interregnum"
+  /** Claimants fought over it: people died, and the polity may have broken in two. */
+  | "civil_war";
 
 export interface Dynasty {
   id: string;
@@ -617,7 +619,9 @@ export type DiplomaticAgreementType =
   | "technology_exchange"
   | "independence_guarantee"
   | "embargo"
-  | "peace";
+  | "peace"
+  /** Two ruling houses bound by a marriage between their kin. */
+  | "dynastic_marriage";
 
 export type DiplomaticAgreementStatus = "active" | "violated" | "expired" | "cancelled";
 

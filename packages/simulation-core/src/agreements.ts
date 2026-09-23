@@ -1,11 +1,13 @@
 import { nextId, type SimContext } from "./context";
+import { related } from "./population";
 import { actor, emitEvent } from "./events";
 import { clamp, round } from "./grid";
-import { formatEventDescription as t, polityPhrase } from "./language/format";
+import { formatEventDescription as t, peoplePhrase, polityPhrase } from "./language/format";
 import { byReputation } from "./serialization";
 import { np, type Gender, type NounPhrase } from "./language/italian";
 import type {
   DiplomaticAgreement,
+  Person,
   DiplomaticAgreementType,
   DiplomaticReputation,
   Relationship,
@@ -38,6 +40,7 @@ const AGREEMENT_NOUNS: Record<DiplomaticAgreementType, { text: string; gender: G
   independence_guarantee: { text: "garanzia d'indipendenza", gender: "f" },
   embargo: { text: "embargo", gender: "m" },
   peace: { text: "trattato di pace", gender: "m" },
+  dynastic_marriage: { text: "matrimonio dinastico", gender: "m" },
 };
 
 export const AGREEMENT_LABELS: Record<DiplomaticAgreementType, string> = Object.fromEntries(
@@ -91,6 +94,14 @@ const RULES: Record<DiplomaticAgreementType, AgreementRule> = {
   military_alliance: { minTrust: 0.5, maxHostility: 0.1, duration: 60 },
   independence_guarantee: { minTrust: 0.3, maxHostility: 0.2, duration: null },
   // These three are not negotiated between friends: they are recorded when they happen.
+  // Houses bind themselves to each other, and the bond outlives the couple.
+  dynastic_marriage: {
+    minTrust: 0.2,
+    maxHostility: 0.3,
+    duration: null,
+    // Only two peoples that actually have a ruling house have houses to join.
+    allows: (_rel, a, b) => a.dynastyId !== null && b.dynastyId !== null,
+  },
   tribute: { minTrust: 0, maxHostility: 1, duration: null },
   embargo: { minTrust: 0, maxHostility: 1, duration: 20 },
   peace: { minTrust: 0, maxHostility: 1, duration: null },
@@ -105,6 +116,7 @@ export const NEGOTIABLE: readonly DiplomaticAgreementType[] = [
   "defensive_alliance",
   "military_alliance",
   "independence_guarantee",
+  "dynastic_marriage",
 ];
 
 export function emptyReputation(civilizationId: string, tick: number): DiplomaticReputation {
@@ -433,6 +445,8 @@ export function updateAgreements(
       if (!canSign(ctx, rel, a.tribe, b.tribe, type)) continue;
       // One pact per pair per year at most: treaties are not signed in batches.
       if (!ctx.rng.chance(willingness * 0.08)) continue;
+      // A dynastic marriage is only worth writing down if there are two people to marry.
+      if (type === "dynastic_marriage" && !marryHouses(ctx, rel, a.tribe, b.tribe)) continue;
       signAgreement(ctx, rel, a.tribe, b.tribe, type);
       break;
     }
@@ -450,4 +464,120 @@ export function updateAgreements(
   }
   // `reputationOf` may have appended records: keep the order a reload would produce.
   state.reputations.sort(byReputation);
+}
+
+// --- Dynastic marriages ------------------------------------------------------------------------
+
+/**
+ * Ages at which a house can offer one of its own. The lower bound is below adulthood on purpose:
+ * dynastic matches were promises between children, and this engine marries its adults off young
+ * — measured with a floor of 16, in three worlds × 600 ticks there was never an unattached
+ * kinsman on both sides at once. Nothing follows from the promise until they come of age:
+ * `AGE.fertileMin` is 16, so no children are born of it before then.
+ */
+export const MARRIAGE_MIN_AGE = 12;
+export const MARRIAGE_MAX_AGE = 45;
+
+/**
+ * Kin of the ruling house who could be married off: adults of the house, still unattached.
+ *
+ * "Of the house" is read widely on purpose — those carrying its name, the ruler's children and
+ * the ruler's brothers and sisters. Measured with only the ruler's own children: in three worlds
+ * × 600 ticks there was never an unattached one on both sides at once, because this engine
+ * marries people off young.
+ */
+function marriageable(ctx: SimContext, tribe: Tribe, sex: "M" | "F"): Person | null {
+  const dynastyId = tribe.dynastyId;
+  if (!dynastyId) return null;
+  const leader = tribe.leaderId ? ctx.people.get(tribe.leaderId) : undefined;
+  const sibling = (p: Person) =>
+    leader !== undefined &&
+    p.id !== leader.id &&
+    ((p.motherId !== null && p.motherId === leader.motherId) ||
+      (p.fatherId !== null && p.fatherId === leader.fatherId));
+  const candidates = ctx.state.people.filter(
+    (p) =>
+      p.alive &&
+      p.tribeId === tribe.id &&
+      p.sex === sex &&
+      p.age >= MARRIAGE_MIN_AGE &&
+      p.age <= MARRIAGE_MAX_AGE &&
+      p.householdId === null &&
+      (p.dynastyId === dynastyId ||
+        (leader !== undefined && (p.motherId === leader.id || p.fatherId === leader.id)) ||
+        sibling(p) ||
+        // A ruler who has nobody can marry in person.
+        p.id === leader?.id),
+  );
+  // The most prestigious match: a house offers its best, not whoever is left.
+  return candidates.reduce<Person | null>(
+    (best, p) =>
+      !best || p.prestige > best.prestige || (p.prestige === best.prestige && p.seq < best.seq) ? p : best,
+    null,
+  );
+}
+
+/**
+ * Marries the two ruling houses to each other, if each has someone to give. The bride or groom
+ * moves to the other people and keeps their own house's name, so their children can carry a
+ * claim in both: the pact is the political fact, this is the family one.
+ *
+ * Returns false when no couple could be made, and then no pact is signed either — a treaty that
+ * marries nobody would be a lie in the chronicle.
+ */
+export function marryHouses(ctx: SimContext, rel: Relationship, a: Tribe, b: Tribe): boolean {
+  // Deterministic: the people with the lower seq offers the groom, so the same world always
+  // produces the same match.
+  const [groomSide, brideSide] = a.seq <= b.seq ? [a, b] : [b, a];
+  const groom = marriageable(ctx, groomSide, "M");
+  const bride = marriageable(ctx, brideSide, "F");
+  if (!groom || !bride) return false;
+  if (related(groom, bride)) return false;
+
+  // The bride joins her husband's people, as the ordinary exogamy in this engine does.
+  bride.tribeId = groomSide.id;
+  bride.settlementId = groom.settlementId;
+  bride.x = groom.x;
+  bride.y = groom.y;
+  for (const techId of groomSide.techs) if (!bride.knowledge.includes(techId)) bride.knowledge.push(techId);
+  const { id, seq } = nextId(ctx.state, "household", "h");
+  ctx.state.households.push({
+    id,
+    seq,
+    tribeId: groomSide.id,
+    partnerIds: [groom.id, bride.id],
+    formedYear: ctx.state.year,
+    dissolvedYear: null,
+  });
+  groom.householdId = id;
+  bride.householdId = id;
+  groom.notable = true;
+  bride.notable = true;
+  // Binding the houses is worth more than any single exchange of goods.
+  rel.trust = round(clamp(rel.trust + 0.15), 3);
+  rel.hostility = round(clamp(rel.hostility - 0.1), 3);
+  rel.respect = round(clamp(rel.respect + 0.1), 3);
+  emitEvent(ctx, {
+    type: "agreement",
+    subtype: "dynastic_marriage",
+    importance: 4,
+    actors: [actor.tribe(groomSide), actor.tribe(brideSide), actor.person(groom), actor.person(bride)],
+    x: groom.x,
+    y: groom.y,
+    title: `Nozze fra ${groomSide.name} e ${brideSide.name}`,
+    description: t("{bride} {di:brideSide} ha sposato {groom} {di:groomSide}: le due case sono ora legate.", {
+      bride: bride.name,
+      brideSide: peoplePhrase(brideSide),
+      groom: groom.name,
+      groomSide: peoplePhrase(groomSide),
+    }),
+    metadata: {
+      groomId: groom.id,
+      brideId: bride.id,
+      groomDynastyId: groomSide.dynastyId,
+      brideDynastyId: brideSide.dynastyId,
+      trust: rel.trust,
+    },
+  });
+  return true;
 }

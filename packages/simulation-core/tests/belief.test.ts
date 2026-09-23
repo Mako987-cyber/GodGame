@@ -9,14 +9,17 @@ import {
   beliefEffects,
   beliefTypeFor,
   canFoundBelief,
+  conversionChance,
   createWorld,
   deserializeState,
   foundBelief,
   runSimulation,
+  schismChance,
   serializeWorld,
   type BeliefContext,
   type BeliefSystem,
   type Cell,
+  type Relationship,
   type Tribe,
   type WorldState,
 } from "../src/index";
@@ -273,5 +276,92 @@ describe("credenze in simulazione", () => {
       expect(tribe.beliefAdherence).toBe(0);
     }
     expect(() => runSimulation(restored, 30)).not.toThrow();
+  });
+});
+
+describe("missionari e scismi", () => {
+  const relation = (overrides: Partial<Relationship> = {}): Relationship =>
+    ({
+      trust: 0.5,
+      hostility: 0.05,
+      atWar: false,
+      distance: 5,
+      ...overrides,
+    }) as Relationship;
+
+  it("si converte chi ha una fede debole, non chi ce l'ha salda", () => {
+    const state = world("conversioni");
+    const ctx = createContext(state);
+    const [a, b] = [spiritual(state.tribes[0]!), spiritual(state.tribes[1]!)];
+    const belief = foundBelief(ctx, a, context(state))!;
+    belief.missionaryPressure = 0.8;
+    a.beliefAdherence = 1;
+    b.culture = { ...b.culture, tolerance: 80, tradeOpenness: 70, traditionalism: 20 };
+
+    // A people with no belief of its own is the easiest to reach.
+    expect(conversionChance(a, b, belief, relation())).toBeGreaterThan(0);
+    // One that already holds its own faith firmly is not.
+    b.beliefSystemId = "bs-altra";
+    b.beliefAdherence = 0.9;
+    expect(conversionChance(a, b, belief, relation())).toBe(0);
+    // One whose faith has thinned is reachable again.
+    b.beliefAdherence = 0.2;
+    expect(conversionChance(a, b, belief, relation())).toBeGreaterThan(0);
+    // Nobody converts to what they already follow.
+    b.beliefSystemId = belief.id;
+    expect(conversionChance(a, b, belief, relation())).toBe(0);
+  });
+
+  it("un popolo chiuso o ostile non ascolta i predicatori", () => {
+    const state = world("chiusi");
+    const ctx = createContext(state);
+    const [a, b] = [spiritual(state.tribes[0]!), state.tribes[1]!];
+    const belief = foundBelief(ctx, a, context(state))!;
+    belief.missionaryPressure = 0.9;
+    a.beliefAdherence = 1;
+    b.culture = { ...b.culture, tolerance: 80, tradeOpenness: 70, traditionalism: 10 };
+    const open = conversionChance(a, b, belief, relation());
+    b.culture = { ...b.culture, traditionalism: 95, tolerance: 10, tradeOpenness: 10 };
+    expect(conversionChance(a, b, belief, relation())).toBeLessThan(open);
+    b.culture = { ...b.culture, tolerance: 80, tradeOpenness: 70, traditionalism: 10 };
+    expect(conversionChance(a, b, belief, relation({ hostility: 0.9, trust: 0 }))).toBeLessThan(open);
+  });
+
+  it("chi ha fondato una credenza non ne fa uno scisma, chi la tiene poco nemmeno", () => {
+    const state = world("scismi");
+    const ctx = createContext(state);
+    const founder = spiritual(state.tribes[0]!);
+    const follower = spiritual(state.tribes[1]!);
+    const belief = foundBelief(ctx, founder, context(state))!;
+    founder.beliefAdherence = 1;
+    follower.beliefSystemId = belief.id;
+    follower.beliefAdherence = 1;
+    expect(schismChance(ctx, founder, belief)).toBe(0);
+    follower.beliefAdherence = 0.1;
+    expect(schismChance(ctx, follower, belief)).toBe(0);
+    follower.beliefAdherence = 0.9;
+    follower.culture = { ...follower.culture, militarism: 95, cooperation: 5, hierarchy: 95 };
+    follower.stability = { ...follower.stability, order: 0.1 };
+    belief.authority = 0.9;
+    belief.tolerance = 0.1;
+    expect(schismChance(ctx, follower, belief)).toBeGreaterThan(0);
+  });
+
+  it("in simulazione conversioni e scismi restano coerenti", () => {
+    const state = createWorld({ seed: "fedi-mondo", width: 64, height: 64 });
+    const result = runSimulation(state, 500);
+    const ids = new Set(state.beliefs.map((b) => b.id));
+    for (const event of result.events.filter((e) => e.subtype === "conversion")) {
+      expect(ids.has(String(event.metadata.beliefId))).toBe(true);
+      expect(event.metadata.fromTribeId).not.toBe(event.actors[0]?.id);
+    }
+    for (const event of result.events.filter((e) => e.subtype === "schism")) {
+      const splinter = state.beliefs.find((b) => b.id === event.metadata.beliefId)!;
+      expect(splinter.parentBeliefIds).toContain(String(event.metadata.parentBeliefId));
+      const parent = state.beliefs.find((b) => b.id === splinter.parentBeliefIds[0])!;
+      // A splinter is harder than what it broke from, never softer.
+      expect(splinter.tolerance).toBeLessThan(parent.tolerance);
+      expect(splinter.authority).toBeGreaterThanOrEqual(parent.authority);
+    }
   });
 });
