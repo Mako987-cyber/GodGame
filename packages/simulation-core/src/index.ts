@@ -53,6 +53,8 @@ export {
   BELIEF_MIN_POPULATION,
   BELIEF_MIN_SPIRITUALITY,
   BELIEF_TYPE_LABELS,
+  CONVERSION_MAX_HOLD,
+  MISSION_MAX_DISTANCE,
   SYNCRETISM_YEARS,
   adherenceDrift,
   applyDerivedEffects,
@@ -62,13 +64,18 @@ export {
   beliefTypeFor,
   canFoundBelief,
   canSyncretize,
+  conversionChance,
   foundBelief,
+  schismChance,
   updateBeliefs,
   type BeliefContext,
 } from "./belief";
 export {
   AGREEMENT_LABELS,
+  MARRIAGE_MAX_AGE,
+  MARRIAGE_MIN_AGE,
   NEGOTIABLE,
+  marryHouses,
   activeAgreements,
   cancelOrphanAgreements,
   canSign,
@@ -148,6 +155,13 @@ export {
   type CheckSeverity,
   type RunMetrics,
 } from "./scenario-metrics";
+export {
+  eventSignature,
+  replayFromSnapshot,
+  verifyReplay,
+  type ReplayDivergence,
+  type ReplayResult,
+} from "./replay";
 export * from "./placement";
 export * from "./politics";
 export * from "./fusion";
@@ -249,6 +263,8 @@ export {
   type CulturePressure,
 } from "./culture";
 export {
+  CIVIL_WAR_MIN_CLAIMANTS,
+  CIVIL_WAR_RISK,
   DYNASTY_MIN_POPULATION,
   MAJORITY_AGE,
   SUCCESSION_LAW_LABELS,
@@ -297,6 +313,7 @@ export {
 } from "./settlement-history";
 export {
   RUINS_FORGOTTEN_AFTER,
+  forkTribe,
   reviveSettlement,
   ruinsAt,
   SETTLE_AFTER_YEARS,

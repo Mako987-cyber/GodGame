@@ -1,11 +1,14 @@
-import { causesFrom } from "./causality";
+import { anchor, causesFrom } from "./causality";
 import { AGE, GOVERNMENTS } from "./constants";
 import { nextId, type SimContext } from "./context";
-import { actor, describePlace, emitEvent } from "./events";
+import { actor, describePlace, emitEvent, pluralPeople } from "./events";
 import { clamp, round } from "./grid";
 import { identityOf } from "./identity/composite";
 import { formatEventDescription as t, formatLeaderTitle, peoplePhrase } from "./language/format";
-import { dynastyName } from "./names";
+import { dynastyName, tribeName } from "./names";
+import { killPerson } from "./population";
+import { forkTribe } from "./settlements";
+import { successorName } from "./identity/naming";
 import type { Dynasty, DynastyEndReason, Person, SuccessionLaw, SuccessionOutcome, Tribe } from "./types";
 
 /**
@@ -54,6 +57,7 @@ export const SUCCESSION_OUTCOME_LABELS: Record<SuccessionOutcome, string> = {
   disputed: "contesa",
   usurpation: "usurpazione",
   interregnum: "interregno",
+  civil_war: "guerra civile",
 };
 
 /** Everything that can turn a handover of power into a crisis. Each term is 0..1. */
@@ -513,21 +517,165 @@ function pickSuccessor(
     context,
   );
   const usurped = outsider !== null && ctx.rng.chance(clamp(risk * 0.55));
-  const outcome: SuccessionOutcome = usurped
-    ? "usurpation"
-    : situation.risk.minorHeir || situation.heirs[0]!.age < MAJORITY_AGE + 3
-      ? "regency"
-      : "disputed";
-  const leader = usurped ? (outsider as Person) : heir;
+  // A contested throne is fought over when someone can actually contest it: a brother of equal
+  // standing, or — far commoner — a powerful figure outside the house with a following of his
+  // own. Measured first with only the sibling case: 0 civil wars in 10 worlds × 600 ticks,
+  // because a ruler rarely leaves more than one eligible child.
+  const challenger = outsider && outsider.prestige >= heir.prestige * 0.9 ? outsider : null;
+  const armed =
+    (situation.risk.rivals >= 1 || challenger !== null) &&
+    risk >= CIVIL_WAR_RISK &&
+    candidates.length >= CIVIL_WAR_MIN_CLAIMANTS &&
+    ctx.rng.chance(clamp(risk * 0.7));
+  const outcome: SuccessionOutcome = armed
+    ? "civil_war"
+    : usurped
+      ? "usurpation"
+      : situation.risk.minorHeir || situation.heirs[0]!.age < MAJORITY_AGE + 3
+        ? "regency"
+        : "disputed";
+  const leader = usurped && !armed ? (outsider as Person) : heir;
   if (!usurped) leader.dynastyId ??= previous.dynastyId;
-  if (usurped) {
+  if (usurped && !armed) {
     endDynasty(ctx, tribe, house, "usurpation");
   } else {
-    house.legitimacy = round(clamp(house.legitimacy - (outcome === "disputed" ? 0.15 : 0.08)), 3);
+    house.legitimacy = round(
+      clamp(house.legitimacy - (outcome === "civil_war" ? 0.25 : outcome === "disputed" ? 0.15 : 0.08)),
+      3,
+    );
     house.crises += 1;
   }
   successionCrisis(ctx, tribe, previous, outcome, risk, situation.risk);
+  if (armed) fightCivilWar(ctx, tribe, leader, situation.heirs[1] ?? challenger ?? outsider, candidates);
   return { leader, outcome };
+}
+
+/** Risk above which a contested succession can be fought with weapons rather than words. */
+export const CIVIL_WAR_RISK = 0.35;
+/** Below this many eligible people there is nobody to raise a faction with. */
+export const CIVIL_WAR_MIN_CLAIMANTS = 6;
+
+/**
+ * A succession fought by arms. People die on both sides and the institutions suffer; and if the
+ * losing claimant holds a settlement of his own, the polity breaks in two along that line —
+ * the same people under two governments, which is what `forkTribe` produces for a secession.
+ *
+ * The loser leaves with the settlement he can actually hold: the largest one that is not the
+ * capital. Without a second settlement there is nothing to break away with, and the war stays
+ * an internal bloodletting.
+ */
+function fightCivilWar(
+  ctx: SimContext,
+  tribe: Tribe,
+  winner: Person,
+  loser: Person | null,
+  candidates: Person[],
+) {
+  const { state } = ctx;
+  const members = state.people.filter((p) => p.alive && p.tribeId === tribe.id);
+  // A fifth of the fighting-age people on the losing side, at most: a war, not an extinction.
+  const victims = Math.max(1, Math.round(members.filter((p) => p.age >= 16).length * 0.04));
+  const pool = members.filter((p) => p.age >= 16 && p.id !== winner.id).slice(0, 200);
+  for (let i = 0; i < Math.min(victims, pool.length); i++) {
+    const victim = pool[i];
+    if (victim) killPerson(ctx, victim, "conflict");
+  }
+  tribe.stability.order = clamp(tribe.stability.order - 0.25);
+  tribe.stability.cohesion = clamp(tribe.stability.cohesion - 0.2);
+  tribe.stability.legitimacy = clamp(tribe.stability.legitimacy - 0.15);
+  tribe.morale = clamp(tribe.morale - 0.15, 0.2, 1);
+
+  const own = state.settlements.filter((s) => s.status === "active" && s.tribeId === tribe.id);
+  const capital = own.reduce<(typeof own)[number] | null>(
+    (best, s) => (!best || s.population > best.population ? s : best),
+    null,
+  );
+  const held = own
+    .filter((s) => s.id !== capital?.id && s.population >= 20)
+    .sort((a, b) => b.population - a.population)[0];
+  const event = emitEvent(ctx, {
+    type: "leadership",
+    subtype: "civil_war",
+    importance: 5,
+    actors: [actor.tribe(tribe), actor.person(winner), ...(loser ? [actor.person(loser)] : [])],
+    x: tribe.x,
+    y: tribe.y,
+    title: t("Guerra civile presso {art:people}", { people: peoplePhrase(tribe) }),
+    description: t(
+      "{winner} e {loser} si sono contesi il comando con le armi presso {art:people}: {victims} hanno perso la vita.",
+      {
+        winner: winner.name,
+        loser: loser?.name ?? "i suoi rivali",
+        people: peoplePhrase(tribe),
+        victims: pluralPeople(Math.min(victims, pool.length)),
+      },
+    ),
+    metadata: {
+      winnerId: winner.id,
+      loserId: loser?.id ?? null,
+      victims: Math.min(victims, pool.length),
+      claimants: candidates.length,
+      settlements: own.length,
+    },
+    causeEventIds: causesFrom(state.year, [[tribe, "leader_death", 3]]),
+  });
+  anchor(tribe, "civil_war", event);
+  if (!held || !loser) return;
+
+  // The loser keeps what he can hold: the people breaks in two.
+  const partisans = members.filter((p) => p.alive && p.settlementId === held.id);
+  if (partisans.length < 20) return;
+  const used = new Set(state.tribes.map((x) => x.name));
+  const identity = identityOf(state, tribe.identityId);
+  let name: string;
+  if (identity && capital) {
+    name = successorName(identity, capital, held, held.name, used);
+  } else {
+    name = tribeName(ctx.rng);
+    while (used.has(name)) name = tribeName(ctx.rng);
+  }
+  const rebel = forkTribe(ctx, tribe, {
+    settlement: held,
+    members: partisans,
+    name,
+    // Born of a war over the same throne: they start as enemies, not as estranged cousins.
+    relationship: { trust: 0, hostility: 0.65, conflictMemory: 0.5 },
+    reference: capital ?? held,
+  });
+  loser.tribeId = rebel.id;
+  loser.settlementId = held.id;
+  rebel.leaderId = loser.id;
+  loser.title = "ruler";
+  loser.titleSinceYear = state.year;
+  emitEvent(ctx, {
+    type: "conflict",
+    subtype: "fragmentation",
+    importance: 5,
+    actors: [actor.tribe(rebel), actor.tribe(tribe), actor.settlement(held), actor.person(loser)],
+    x: held.x,
+    y: held.y,
+    title: t("{art:people} si spezza", { people: peoplePhrase(tribe) }),
+    description: t(
+      "Perduta la contesa per il comando, {loser} si è {withdrawn} a {place} con {n} seguaci: {art:rebel} non {v:rebel:riconosce|riconoscono} più {art:people}.",
+      {
+        loser: loser.name,
+        withdrawn: loser.sex === "F" ? "ritirata" : "ritirato",
+        place: held.name,
+        n: partisans.length,
+        rebel: peoplePhrase(rebel),
+        people: peoplePhrase(tribe),
+      },
+    ),
+    metadata: {
+      civilWar: true,
+      settlementId: held.id,
+      parentTribeId: tribe.id,
+      identityId: tribe.identityId,
+      followers: partisans.length,
+      loserId: loser.id,
+    },
+    causeEventIds: event.id ? [event.id] : [],
+  });
 }
 
 /**

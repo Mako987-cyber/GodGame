@@ -24,6 +24,7 @@
     "simulation:run": "tsx scripts/simulation-run.ts",
     "simulation:compare": "tsx scripts/simulation-compare.ts",
     "simulation:stress": "tsx scripts/simulation-stress.ts",
+    "simulation:replay": "tsx scripts/simulation-replay.ts",
     "diagnose:world-delete": "tsx scripts/diagnose-world-delete.ts",
     "test:simulation": "vitest run --config vitest.stress.config.ts",
     "test:world-delete": "vitest run tests/world-deletion.test.ts tests/world-deletion.pg.test.ts",

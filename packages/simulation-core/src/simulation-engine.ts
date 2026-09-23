@@ -120,6 +120,11 @@ export function runSimulation(state: WorldState, ticks: number, options: RunOpti
     ticksRun++;
   }
   state.rng = ctx.rng.getState();
+  // The state a batch hands back must be in the same canonical order a reload produces. Lists
+  // are sorted at the start of every tick, so anything appended during the last one (a new
+  // relationship, a seceded people) would otherwise sit out of place until the next batch — and
+  // an in-memory world would stop matching the one saved and read back.
+  normalizeState(state);
   return { ticksRun, partial, events: ctx.events, stats, civStats };
 }
 

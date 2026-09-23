@@ -229,6 +229,7 @@ npm run test:all        # entrambe le suite
 npm run simulation:run -- --scenario fertile-valley --seed test-001 --ticks 200 [--profile]
 npm run simulation:compare -- --scenario trade-corridor --seed test-002
 npm run simulation:stress -- [--seeds 20] [--ticks 200] [--scenario-seeds 3]
+npm run simulation:replay -- --seed test-003 --snapshot 100 --ticks 100
 npm run lint            # ESLint (config Next core-web-vitals + TypeScript)
 npm run typecheck       # tsc --noEmit (strict, noUncheckedIndexedAccess)
 npm run format          # Prettier
@@ -741,6 +742,28 @@ legittimità alla casa e al popolo e aprono una crisi di tipo `succession`. Una 
 potere** attraverso un discendente, ma non prima di dieci anni e solo dove il potere si trasmette ancora per
 sangue (`restoreDynasty`): gli anni fuori dal potere restano nel record.
 
+#### Guerra civile e frammentazione
+
+Quando il trono è conteso da qualcuno che può davvero contenderlo — un fratello di pari rango o, assai più
+spesso, una figura potente fuori dalla casa — la successione può essere decisa con le armi
+(`CIVIL_WAR_RISK`, `CIVIL_WAR_MIN_CLAIMANTS`). Costa vite, ordine, coesione e legittimità. Se il perdente
+tiene un insediamento suo, il popolo **si spezza**: nasce un secondo governo dello stesso popolo, con la
+stessa identità, le stesse tecniche e la stessa credenza, e una relazione che parte da nemici.
+
+La separazione usa la stessa funzione della secessione (`forkTribe`): un popolo che si divide per una guerra
+di successione e uno che si divide per lontananza producono lo stesso tipo di successore, e differiscono solo
+nella relazione da cui partono.
+
+_Misura_: 1 guerra civile e 1 frammentazione su 10 mondi × 600 tick. Un primo tentativo che richiedeva **due
+fratelli rivali** produceva 0 casi, perché un sovrano lascia raramente più di un figlio idoneo.
+
+#### Matrimoni dinastici
+
+Due case regnanti possono legarsi con un matrimonio (`marryHouses`), registrato come accordo diplomatico: la
+sposa raggiunge il popolo dello sposo, entrambi restano della propria casa, e la fiducia fra i due popoli
+sale. Le età ammesse partono sotto l'età adulta perché le unioni dinastiche erano promesse fra ragazzi; non ne
+nasce nulla prima dei 16 anni, che è l'età fertile del motore.
+
 ### Credenze e sistemi di valori
 
 Non esiste nessuna religione reale nel codice. Una **credenza** nasce fra un popolo diventato abbastanza
@@ -757,11 +780,24 @@ quiete e si incrina con la fame e la guerra (`adherenceDrift`); una fede prosciu
 credenza, con un evento dedicato. La differenza di credenze entra nella distanza culturale usata dalla
 diplomazia (`beliefDistance`), con peso 0,25 contro 0,75 dei tratti culturali.
 
+I **missionari** portano una credenza ai vicini in contatto: la probabilità dipende da quanto quella credenza
+spinge verso l'esterno, da quanto il popolo che la riceve è tollerante e aperto, e da quanto tiene alla propria
+fede — chi crede ancora fermamente non si converte (`CONVERSION_MAX_HOLD`). Uno **scisma** nasce quando un
+popolo pratica da tempo una credenza fondata da altri, la sua cultura se ne è allontanata e quel culto chiede
+molto e concede poco: il ramo che nasce è più severo e meno tollerante di quello da cui si è staccato, e tiene
+il genitore agli atti.
+
 Il **sincretismo** unisce due culti di popoli che sono stati vicini e indisturbati per una generazione
 (`SYNCRETISM_YEARS`), entrambi tolleranti e aperti. Non richiede fiducia diplomatica: in questo motore la
 fiducia si accumula solo col commercio attivo, e due popoli possono restare in pace per tre secoli con fiducia
 zero — che è esattamente la situazione in cui i riti si mescolano. I due culti d'origine non vengono cancellati:
 passano a `absorbed` e restano citati come genitori del nuovo.
+
+Conversione e sincretismo non competono: si converte chi ha una fede debole, si fondono i riti di due popoli
+che credono entrambi fermamente e quindi non possono convertirsi a vicenda.
+
+_Misura_ (10 mondi × 600 tick): 39 credenze fondate, **27 conversioni**, **5 scismi**, 0 sincretismi; i popoli
+vivi che seguono una credenza salgono dal 54% al **67%**.
 
 ### Accordi diplomatici e reputazione
 
@@ -836,6 +872,17 @@ vengono rilasciati quando la loro storia si chiude.
 Il pannello «Perché è successo?» risale la catena **nel database** (`/events/:eventId/causality`): cause fino
 a quattro livelli e conseguenze dirette, una query per livello. Prima le cause si vedevano solo se capitavano
 sulla stessa pagina della cronaca.
+
+#### Replay
+
+Il motore è deterministico e porta il proprio generatore dentro lo stato: uno snapshot preso al tick N e
+rigiocato per M tick deve riprodurre, evento per evento, quello che la corsa originale ha prodotto fra N e
+N+M. `replay.ts` lo verifica confrontando l'hash dello stato e la firma di ogni evento, e dice dove le due
+storie smettono di coincidere. È verifica, non un secondo motore: non simula nulla di proprio.
+
+```bash
+npm run simulation:replay -- --seed test-003 --snapshot 100 --ticks 100
+```
 
 Indice GIN su `cause_event_ids`: **non aggiunto**, dopo aver misurato il piano. La ricerca delle conseguenze
 (`@>` su JSONB) usa l'indice per mondo e filtra: 7,6 ms su 20.000 eventi nello stesso mondo, contro qualche
@@ -1559,20 +1606,23 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
     permettendo al capo di un chiefdom di rendere ereditario il comando: ora 5–9 case per mondo (500 tick,
     mappa 64×64), fino a 10 sovrani per casa, fini con causa registrata e restaurazioni. _Limiti_: gli esiti
     `disputed` e `usurpation` restano rari nelle partite standard (prevalgono `peaceful`, `regency` e
-    `interregnum`) perché dipendono da più pretendenti con prestigio ravvicinato; la **guerra civile** come
-    esito distinto e la **frammentazione territoriale** alla morte di un sovrano **non sono modellate** (una
-    crisi abbassa legittimità e apre una crisi, non spacca lo stato); non esistono matrimoni dinastici né
-    ostaggi politici; la **timeline dinastica in UI non è stata realizzata** — i dati sono esposti dall'API
+    `interregnum`) perché dipendono da più pretendenti con prestigio ravvicinato. **Guerra civile** e
+    **frammentazione** esistono ma sono rare: 1 e 1 su 10 mondi × 600 tick, perché richiedono una successione
+    contesa, un pretendente forte e almeno sei persone idonee; un primo tentativo che pretendeva due fratelli
+    rivali ne produceva 0. I **matrimoni dinastici** sono implementati e provati da test costruiti ma **non
+    avvengono mai nelle partite standard**: su 3 mondi × 600 tick, i casi in cui due popoli hanno entrambi una
+    casa regnante e abbastanza fiducia sono 129, e in nessuno c'era un parente della casa ancora libero. Non
+    esistono ostaggi politici; la **timeline dinastica in UI non è stata realizzata** — i dati sono esposti dall'API
     (`legitimacy`, `successionLaw`, `status`, `endReason`, `crises`, `currentLeaderId`) ma nessun pannello li
     disegna.
 15. **Credenze** — _implementate e misurate_: 71 credenze su 10 mondi × 600 tick, con **54% dei popoli
-    sopravvissuti** che ne segue una, e forme davvero diverse (culto degli antenati, spiritualità della natura,
-    culto del fiume, pantheon, culto dello stato). Nessuna è assegnata per identità storica. _Limiti_: il
-    **sincretismo è molto raro** (2 casi su 10 mondi × 600 tick), perché richiede due popoli credenti, vicini e
-    indisturbati per 25 anni consecutivi; l'**adesione satura a 1,00** nei popoli stabili e non torna a
-    scendere se non con fame o guerra, quindi le dinamiche di fede si vedono poco; non esistono **eresie,
-    scismi, conversione missionaria attiva, festività né clero come specialisti**; la pressione missionaria è
-    registrata e influenza l'attrito, ma **non converte nessuno**; i tipi `solar_cult`, `mountain_cult` e
+    sopravvissuti** che ne segue una — **67%** da quando esistono i missionari — e forme davvero diverse
+    (culto degli antenati, spiritualità della natura, culto del fiume, pantheon, culto dello stato). Nessuna è
+    assegnata per identità storica. **Conversione missionaria e scismi** sono implementati e misurati: 27
+    conversioni e 5 scismi su 10 mondi × 600 tick. _Limiti_: il **sincretismo non avviene più nelle partite
+    standard** (0 casi contro i 2 di prima) perché la conversione raggiunge la coppia per prima — una fede
+    appena nata è debole e viene assorbita; l'**adesione satura a 1,00** nei popoli stabili e non torna a
+    scendere se non con fame o guerra; non esistono **festività né clero come specialisti**; i tipi `solar_cult`, `mountain_cult` e
     `philosophical` sono raggiungibili ma non compaiono nelle misure fatte.
 16. **Memoria storica delle città** — _implementata e misurata_ su 303 insediamenti (6 mondi × 600 tick):
     ragioni di fondazione distribuite (migrazione 207, giacimento 30, presidio 23, scambio 22, agricoltura 11,
@@ -1587,8 +1637,9 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
     tick), tutti e sette i tipi negoziabili compaiono, 83 violazioni registrate, e le reputazioni divergono
     davvero (`treatyRespect` fra 0,50 e 0,99, `threatLevel` fra 0,01 e 0,62). La reputazione influenza la
     diffusione tecnologica (`knowledgeOpenness`). _Limiti_: l'**aggressività resta vicina a 0,01** quasi
-    ovunque, perché le guerre dichiarate sono rare e la media le diluisce; non esistono **matrimoni dinastici,
-    ostaggi politici, ultimatum né coalizioni**; embargo, tributo e pace sono modellati ma **non vengono mai
+    ovunque, perché le guerre dichiarate sono rare e la media le diluisce; il matrimonio dinastico è ora un
+    tipo di accordo ma non viene mai firmato (vedi punto 14); non esistono **ostaggi politici, ultimatum né
+    coalizioni**; embargo, tributo e pace sono modellati ma **non vengono mai
     firmati dal motore** — sono registrabili, non ancora prodotti.
 18. **Crisi e resilienza** — _implementati e misurati_: profili con resilienza complessiva fra 0,31 e 0,81, e
     risposte alle crisi differenziate (redistribuzione 105, commercio 50, migrazione 36, colonizzazione 3 su
@@ -1616,12 +1667,13 @@ Stato reale delle funzionalità (implementato · parziale · previsto):
     «dove li ho visti l'ultima volta». Gli **informatori** e le **stime delle risorse** non sono modellati.
     Lo spionaggio vale il 6–8% degli eventi di importanza ≥3 quando è a importanza 3, e per questo è stato
     abbassato a 2.
-21. **Causalità** — _implementata e misurata_: gli eventi di importanza ≥4 con cause registrate passano dal
+21. **Causalità e replay** — _implementate e misurate_: gli eventi di importanza ≥4 con cause registrate passano dal
     **9% al 36%** (3 semi × 500 tick); ogni causa citata esiste ed è precedente. La catena si risale nel
     database, non più solo nella pagina di cronaca visibile. _Limiti_: le categorie rimaste senza causa sono
     soprattutto quelle che non hanno un evento-causa (epidemie, invenzioni, prime fondazioni) e sono spiegate
-    dai metadata; il **replay** (ripartire da uno snapshot e rigiocare) **non è implementato**: il
-    determinismo è verificato, ma non esiste uno strumento che lo usi per ricostruire la storia.
+    dai metadata. Il **replay** ricostruisce la storia da uno snapshot e verifica che coincida evento per
+    evento (`npm run simulation:replay`). _Limite_: lavora su snapshot presi in memoria, e **non esiste un
+    comando che rigiochi uno snapshot già salvato nel database** di un mondo reale.
 22. **Scenari e stress** — _implementati_: 13 scenari riproducibili e tre comandi senza database. Su 20 semi ×
     3 dimensioni × 200 tick tutti i controlli richiesti passano (vedi «Scenari e stress»). _Limiti_: **anche
     lo scenario più favorevole alle fusioni ne produce 0** e vi si contano 28 guerre in 200 anni; il deserto
@@ -1654,9 +1706,10 @@ Trade-off noti che restano validi:
 In ordine di priorità (il database è stato reso affidabile prima di estendere le funzionalità):
 
 0. **Chiudere la milestone «civiltà vive»**: far decidere sulle stime anche commercio, accordi e
-   vassallaggi; mappa esplorata per popolo; guerra civile e frammentazione come esiti di una crisi di
-   successione, matrimoni dinastici; conversione missionaria attiva, scismi e clero; replay da snapshot;
-   verifica visiva dell'interfaccia nel browser (oggi verificata solo via HTTP e test).
+   vassallaggi; mappa esplorata per popolo; clero come specialisti e festività; replay di uno snapshot già
+   salvato nel database; timeline dinastica in interfaccia; verifica visiva dell'interfaccia nel browser
+   (oggi verificata solo via HTTP e test). Vanno inoltre riviste le condizioni dei **matrimoni dinastici**,
+   oggi mai soddisfatte, e del **sincretismo**, ora soppiantato dalla conversione.
 1. **Catalogo**: estendere le identità reali (Oceania, Africa subsahariana, Asia centrale e sudorientale,
    Americhe) e popolare la categoria `regional`.
 2. **Età moderna**: altre identità moderne selezionabili, sempre con partenza uniforme e senza modificatori.

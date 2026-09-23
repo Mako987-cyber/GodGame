@@ -47,6 +47,7 @@ import type {
   Cell,
   Civilization,
   ConstructionProject,
+  Person,
   Settlement,
   SettlementTier,
   Tribe,
@@ -1051,37 +1052,29 @@ export function recordCivilizationCollapse(ctx: SimContext, civ: Civilization) {
  * Distant colonies may break away (much less likely once writing enables administration)
  * and become independent tribes, keeping the political map from freezing.
  */
-export function trySecession(ctx: SimContext, community: Community): Tribe | null {
-  const s = community.settlement;
-  const parent = community.tribe;
-  if (!s || community.members.length < 40) return null;
-  const own = ctx.state.settlements.filter((o) => o.status === "active" && o.tribeId === parent.id);
-  if (own.length < 3) return null;
-  const capital = own.reduce((best, o) => (o.population > best.population ? o : best));
-  // Writing and laws hold a large polity together; unrest and distance pull it apart.
-  const administration = parent.techs.includes("writing") ? 0.004 : 0.015;
-  const chance =
-    administration *
-    (1 + s.unrest * 2 + parent.stability.tension * 1.5) *
-    (parent.techs.includes("laws") ? 0.6 : 1);
-  if (
-    capital.id === s.id ||
-    distance(capital.x, capital.y, s.x, s.y) < 8 ||
-    !ctx.rng.chance(clamp(chance, 0, 0.2))
-  )
-    return null;
-
+/**
+ * How a people splits in two. The settlement, its people and its households pass to the new
+ * polity, which keeps the identity, the technologies and the culture of the one it leaves: it is
+ * the same people under a second government, not a new people.
+ *
+ * Shared by the two ways this happens — a distant colony that stops obeying (`trySecession`) and
+ * a contested succession that ends in civil war (`leadership.ts`) — so both produce exactly the
+ * same kind of successor, differing only in the relationship they start from.
+ */
+export function forkTribe(
+  ctx: SimContext,
+  parent: Tribe,
+  options: {
+    settlement: Settlement;
+    members: Person[];
+    name: string;
+    /** Relationship the two start with. A civil war begins far angrier than a secession. */
+    relationship: { trust: number; hostility: number; conflictMemory: number };
+    reference: { x: number; y: number };
+  },
+): Tribe {
+  const { settlement: s, members, name } = options;
   const { id, seq } = nextId(ctx.state, "tribe", "t");
-  const used = new Set(ctx.state.tribes.map((t) => t.name));
-  const identity = identityOf(ctx.state, parent.identityId);
-  let name: string;
-  if (identity) {
-    // Same people, new polity: "Egizi del Sud", never an unrelated second "Egizi".
-    name = successorName(identity, capital, s, s.name, used);
-  } else {
-    name = tribeName(ctx.rng);
-    while (used.has(name)) name = tribeName(ctx.rng);
-  }
   const tribe: Tribe = {
     ...parent,
     id,
@@ -1114,8 +1107,9 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     identityType: parent.identityType,
     absorbedIdentityIds: [],
     absorbedByTribeId: null,
-    beliefSystemId: null,
-    beliefAdherence: 0,
+    // The belief travels with the people that carries it; faith is shaken by the break.
+    beliefSystemId: parent.beliefSystemId,
+    beliefAdherence: round(clamp((parent.beliefAdherence ?? 0) * 0.7), 3),
     cultureHistory: [],
     resilience: null,
     causalAnchors: {},
@@ -1128,7 +1122,7 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
   s.civilizationId = null;
   s.unrest = 0.05;
   s.roadLinks = s.roadLinks.filter((l) => ctx.settlements.get(l)?.tribeId !== parent.id);
-  for (const p of community.members) p.tribeId = id;
+  for (const p of members) p.tribeId = id;
   for (const h of ctx.state.households) {
     const partner = ctx.people.get(h.partnerIds[0]);
     if (partner?.settlementId === s.id) h.tribeId = id;
@@ -1138,14 +1132,14 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     id: parent.seq < seq ? `${parent.id}|${id}` : `${id}|${parent.id}`,
     aId: parent.seq < seq ? parent.id : id,
     bId: parent.seq < seq ? id : parent.id,
-    trust: 0.1,
-    hostility: 0.3,
+    trust: options.relationship.trust,
+    hostility: options.relationship.hostility,
     tradeVolume: 0,
-    conflictMemory: 0.1,
+    conflictMemory: options.relationship.conflictMemory,
     atWar: false,
     warStartYear: null,
     allied: false,
-    distance: distance(capital.x, capital.y, s.x, s.y),
+    distance: distance(options.reference.x, options.reference.y, s.x, s.y),
     lastInteractionYear: ctx.state.year,
     battles: 0,
     truceUntilYear: null,
@@ -1157,6 +1151,46 @@ export function trySecession(ctx: SimContext, community: Community): Tribe | nul
     lastConflictYear: null,
     phaseYears: 0,
     fusionYears: 0,
+  });
+  return tribe;
+}
+
+export function trySecession(ctx: SimContext, community: Community): Tribe | null {
+  const s = community.settlement;
+  const parent = community.tribe;
+  if (!s || community.members.length < 40) return null;
+  const own = ctx.state.settlements.filter((o) => o.status === "active" && o.tribeId === parent.id);
+  if (own.length < 3) return null;
+  const capital = own.reduce((best, o) => (o.population > best.population ? o : best));
+  // Writing and laws hold a large polity together; unrest and distance pull it apart.
+  const administration = parent.techs.includes("writing") ? 0.004 : 0.015;
+  const chance =
+    administration *
+    (1 + s.unrest * 2 + parent.stability.tension * 1.5) *
+    (parent.techs.includes("laws") ? 0.6 : 1);
+  if (
+    capital.id === s.id ||
+    distance(capital.x, capital.y, s.x, s.y) < 8 ||
+    !ctx.rng.chance(clamp(chance, 0, 0.2))
+  )
+    return null;
+
+  const used = new Set(ctx.state.tribes.map((t) => t.name));
+  const identity = identityOf(ctx.state, parent.identityId);
+  let name: string;
+  if (identity) {
+    // Same people, new polity: "Egizi del Sud", never an unrelated second "Egizi".
+    name = successorName(identity, capital, s, s.name, used);
+  } else {
+    name = tribeName(ctx.rng);
+    while (used.has(name)) name = tribeName(ctx.rng);
+  }
+  const tribe = forkTribe(ctx, parent, {
+    settlement: s,
+    members: community.members,
+    name,
+    relationship: { trust: 0.1, hostility: 0.3, conflictMemory: 0.1 },
+    reference: capital,
   });
   emitEvent(ctx, {
     type: "conflict",

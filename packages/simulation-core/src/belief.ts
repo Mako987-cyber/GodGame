@@ -1,4 +1,5 @@
 import { nextId, type SimContext } from "./context";
+import { culturalDistance } from "./culture";
 import { actor, emitEvent } from "./events";
 import { cellsInRadius, clamp, distance, round } from "./grid";
 import { formatEventDescription as t, peoplePhrase } from "./language/format";
@@ -325,6 +326,12 @@ export function canSyncretize(
   const second = beliefs.get(b.beliefSystemId);
   if (!first || !second) return false;
   if (first.status !== "active" || second.status !== "active") return false;
+  // Conversion and syncretism are two answers to the same meeting, and they do not compete: a
+  // people whose faith is thin takes up its neighbour's (see `conversionChance`), while two
+  // peoples who both hold firmly cannot convert each other — those are the ones whose rites
+  // blend. Measured: with conversion added and no such split, syncretism fell to zero.
+  if (clamp(a.beliefAdherence ?? 0) <= CONVERSION_MAX_HOLD) return false;
+  if (clamp(b.beliefAdherence ?? 0) <= CONVERSION_MAX_HOLD) return false;
   // Both sides must be open enough to admit the other is talking about the same thing.
   if (first.tolerance < SYNCRETISM_MIN_TOLERANCE || second.tolerance < SYNCRETISM_MIN_TOLERANCE) {
     return false;
@@ -471,6 +478,34 @@ export function updateBeliefs(ctx: SimContext, contexts: ReadonlyMap<string, Bel
     }
   }
 
+  // Missionaries: a belief that pushes outward reaches the neighbours it is in contact with.
+  for (const rel of state.relationships) {
+    if (rel.atWar || rel.distance > MISSION_MAX_DISTANCE) continue;
+    const a = ctx.tribes.get(rel.aId);
+    const b = ctx.tribes.get(rel.bId);
+    if (!a || !b || a.status === "extinct" || b.status === "extinct") continue;
+    for (const [from, to] of [
+      [a, b],
+      [b, a],
+    ] as const) {
+      const belief = from.beliefSystemId ? beliefs.get(from.beliefSystemId) : undefined;
+      if (!belief || belief.status !== "active") continue;
+      const chance = conversionChance(from, to, belief, rel);
+      if (chance <= 0 || !ctx.rng.chance(chance)) continue;
+      convert(ctx, to, from, belief);
+    }
+  }
+
+  // Schism: a people that holds a belief it no longer recognises makes its own of it.
+  for (const tribe of alive) {
+    const belief = tribe.beliefSystemId ? beliefs.get(tribe.beliefSystemId) : undefined;
+    if (!belief || belief.status !== "active") continue;
+    const chance = schismChance(ctx, tribe, belief);
+    if (chance <= 0 || !ctx.rng.chance(chance)) continue;
+    const splinter = schism(ctx, tribe, belief);
+    beliefs.set(splinter.id, splinter);
+  }
+
   // Syncretism: only between neighbours who have been at peace long enough.
   for (const rel of state.relationships) {
     if (rel.phaseYears < SYNCRETISM_YEARS) continue;
@@ -519,4 +554,136 @@ export function beliefContextOf(
     hardship: round(clamp(1 - foodRatio + Math.min(0.4, tribe.scarcityYears * 0.12)), 3),
     atWar,
   };
+}
+
+// --- Missionaries and schisms ------------------------------------------------------------------
+
+/** Farthest a belief travels by preaching rather than by living side by side. */
+export const MISSION_MAX_DISTANCE = 12;
+
+/**
+ * Yearly chance that `to` takes up the belief `from` preaches.
+ *
+ * A belief only travels if it pushes (`missionaryPressure`), and it lands where there is room
+ * for it: a people with no belief of its own, or one whose faith has grown thin. A traditional
+ * people resists, a tolerant and open one listens, and a hostile neighbour is not listened to
+ * at all.
+ */
+export function conversionChance(from: Tribe, to: Tribe, belief: BeliefSystem, rel: Relationship): number {
+  if (to.beliefSystemId === belief.id) return 0;
+  // Nobody abandons a faith they still hold firmly.
+  const hold = to.beliefSystemId === null ? 0 : clamp(to.beliefAdherence ?? 0);
+  if (hold > CONVERSION_MAX_HOLD) return 0;
+  const openness =
+    (to.culture.tolerance / 100) * 0.5 +
+    (to.culture.tradeOpenness / 100) * 0.3 -
+    (to.culture.traditionalism / 100) * 0.4;
+  const welcome = clamp(rel.trust * 0.5 + (1 - rel.hostility) * 0.5);
+  const pressure = belief.missionaryPressure * clamp(from.beliefAdherence ?? 0);
+  return round(clamp(pressure * (0.25 + openness) * welcome * (1 - hold) * 0.06, 0, 0.05), 4);
+}
+
+/** Above this much faith in what it already believes, a people does not convert. */
+export const CONVERSION_MAX_HOLD = 0.5;
+
+function convert(ctx: SimContext, to: Tribe, from: Tribe, belief: BeliefSystem) {
+  const previousId = to.beliefSystemId;
+  const previous = previousId ? ctx.state.beliefs.find((b) => b.id === previousId) : undefined;
+  to.beliefSystemId = belief.id;
+  // A faith just taken up is not yet deeply held.
+  to.beliefAdherence = 0.2;
+  emitEvent(ctx, {
+    type: "belief",
+    subtype: "conversion",
+    importance: 3,
+    actors: [actor.tribe(to), actor.tribe(from)],
+    x: to.x,
+    y: to.y,
+    title: `${to.name} accoglie ${belief.name}`,
+    description: t(
+      "I predicatori {di:from} hanno convinto {art:to}{leaving}: ora {v:to:segue|seguono} {belief}.",
+      {
+        from: peoplePhrase(from),
+        to: peoplePhrase(to),
+        leaving: previous ? ` ad abbandonare ${previous.name}` : "",
+        belief: belief.name,
+      },
+    ),
+    metadata: {
+      beliefId: belief.id,
+      fromTribeId: from.id,
+      previousBeliefId: previousId,
+      missionaryPressure: belief.missionaryPressure,
+    },
+  });
+}
+
+/**
+ * Yearly chance that a people breaks its own belief in two. It needs a reason to: a cult that
+ * demands much and tolerates little, held by a people whose order has gone and whose ways have
+ * drifted from those of the people that founded it.
+ */
+export function schismChance(ctx: SimContext, tribe: Tribe, belief: BeliefSystem): number {
+  // The founders do not split from themselves, and a belief nobody else follows cannot schism.
+  if (belief.foundedByTribeId === tribe.id) return 0;
+  if ((tribe.beliefAdherence ?? 0) < 0.3) return 0;
+  const founder = ctx.tribes.get(belief.foundedByTribeId);
+  const drift = founder ? culturalDistance(tribe.culture, founder.culture) : 0.5;
+  const strain = clamp(
+    belief.authority * 0.4 + (1 - belief.tolerance) * 0.3 + (1 - tribe.stability.order) * 0.3,
+  );
+  return round(clamp(drift * strain * 0.02, 0, 0.02), 4);
+}
+
+/**
+ * The splinter keeps the parent on record and inherits its shape, harder and less accommodating:
+ * a people that breaks away over how a thing should be practised does not become more relaxed
+ * about it. The parent belief is untouched — its other followers keep it.
+ */
+function schism(ctx: SimContext, tribe: Tribe, parent: BeliefSystem): BeliefSystem {
+  const { id, seq } = nextId(ctx.state, "belief", "bs");
+  const belief: BeliefSystem = {
+    id,
+    seq,
+    name: `${parent.name.split(" ")[0]} di ${tribe.name}`,
+    type: parent.type,
+    foundedByTribeId: tribe.id,
+    principles: [...parent.principles],
+    authority: round(clamp(parent.authority + 0.1), 3),
+    tolerance: round(clamp(parent.tolerance - 0.25), 3),
+    missionaryPressure: round(clamp(parent.missionaryPressure + 0.1), 3),
+    cohesionEffect: 0,
+    legitimacyEffect: 0,
+    conflictRisk: 0,
+    createdAtTick: ctx.state.tick,
+    createdYear: ctx.state.year,
+    parentBeliefIds: [parent.id],
+    status: "active",
+    endedYear: null,
+    causeEventId: null,
+  };
+  applyDerivedEffects(belief);
+  ctx.state.beliefs.push(belief);
+  tribe.beliefSystemId = belief.id;
+  const event = emitEvent(ctx, {
+    type: "belief",
+    subtype: "schism",
+    importance: 4,
+    actors: [actor.tribe(tribe)],
+    x: tribe.x,
+    y: tribe.y,
+    title: `Scisma: nasce ${belief.name}`,
+    description: t(
+      "{Art:people} non {v:people:riconosce|riconoscono} più il modo in cui {parent} viene praticata altrove: da qui in poi {v:people:segue|seguono} {belief}.",
+      { people: peoplePhrase(tribe), parent: parent.name, belief: belief.name },
+    ),
+    metadata: {
+      beliefId: belief.id,
+      parentBeliefId: parent.id,
+      authority: belief.authority,
+      tolerance: belief.tolerance,
+    },
+  });
+  belief.causeEventId = event.id.length > 0 ? event.id : null;
+  return belief;
 }
